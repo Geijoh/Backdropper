@@ -109,8 +109,8 @@ public static class ScreenshotWin32
 
     static GraphicsPath RoundedWindowPath(int width, int height)
     {
-        // Matches CreateRoundRectRgn(..., Px(18), Px(18)) in the app at any DPI.
-        float diameter = Math.Max(1f, (float)Math.Round(width * 18.0 / 1060.0));
+        // ponytail: over-cut the app's Px(18) corner so captured compositor fringe pixels stay transparent.
+        float diameter = Math.Max(1f, (float)Math.Ceiling(width * 24.0 / 1060.0));
         var path = new GraphicsPath();
         path.AddArc(0, 0, diameter, diameter, 180, 90);
         path.AddArc(width - diameter, 0, diameter, diameter, 270, 90);
