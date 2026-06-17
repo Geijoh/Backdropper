@@ -1269,13 +1269,6 @@ void DrawLeftPane(Graphics& g, const Theme& t)
     const double thumbX = Dip(g_layout.restartToggle.left) + (g_state.settings.deleteThumbnailDbsOnSave ? 22 : 4);
     DrawRounded(g, RectDip(thumbX, Dip(g_layout.restartToggle.top) + 4, 12, 12), 6,
         g_state.settings.deleteThumbnailDbsOnSave ? t.accentText : t.toggleOff);
-
-    nextY += 100;
-    DrawRoundedBorder(g, RectDip(cardX, nextY, cardW, 75), 7, t.card, t.cardBorder);
-    SolidBrush dot(RegistrationDot(t));
-    g.FillEllipse(&dot, RectFOf(RectDip(cardX + 19, nextY + 33, 9, 9)));
-    DrawTextBlock(g, L"PNG handler", RectDip(cardX + 39, nextY + 19, cardW - 58, 20), 14, t.fg, FontStyleBold);
-    DrawTextBlock(g, RegistrationText(), RectDip(cardX + 39, nextY + 43, cardW - 58, 18), 12.5f, t.fg2);
 }
 
 void DrawRightPane(Graphics& g, const Theme& t)
