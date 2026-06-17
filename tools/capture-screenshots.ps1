@@ -109,13 +109,14 @@ public static class ScreenshotWin32
 
     static GraphicsPath RoundedWindowPath(int width, int height)
     {
-        // ponytail: over-cut the app's Px(18) corner so captured compositor fringe pixels stay transparent.
+        // ponytail: over-cut corners and inset edges so captured compositor border pixels stay transparent.
+        const float inset = 2f;
         float diameter = Math.Max(1f, (float)Math.Ceiling(width * 32.0 / 1060.0));
         var path = new GraphicsPath();
-        path.AddArc(0, 0, diameter, diameter, 180, 90);
-        path.AddArc(width - diameter, 0, diameter, diameter, 270, 90);
-        path.AddArc(width - diameter, height - diameter, diameter, diameter, 0, 90);
-        path.AddArc(0, height - diameter, diameter, diameter, 90, 90);
+        path.AddArc(inset, inset, diameter, diameter, 180, 90);
+        path.AddArc(width - inset - diameter, inset, diameter, diameter, 270, 90);
+        path.AddArc(width - inset - diameter, height - inset - diameter, diameter, diameter, 0, 90);
+        path.AddArc(inset, height - inset - diameter, diameter, diameter, 90, 90);
         path.CloseFigure();
         return path;
     }
