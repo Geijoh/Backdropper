@@ -27,6 +27,13 @@ constexpr wchar_t kPngThumbHandlerKey[] =
     L"Software\\Classes\\.png\\shellex\\{E357FCCD-A995-4576-B01F-234630154E96}";
 constexpr wchar_t kBackdropperClsid[] = L"{7F08B58C-8D1C-44D3-9A73-AB554FF53B1D}";
 
+#define WIDEN_TEXT2(value) L##value
+#define WIDEN_TEXT(value) WIDEN_TEXT2(value)
+#ifndef BACKDROPPER_VERSION
+#define BACKDROPPER_VERSION "0.0.0"
+#endif
+constexpr wchar_t kBackdropperVersion[] = WIDEN_TEXT(BACKDROPPER_VERSION);
+
 enum class Hit {
     None,
     MatchSystem,
@@ -735,24 +742,54 @@ void DrawSwitch(Graphics& g, const RECT& rect, bool on, const Theme& t)
 
 void DrawGithubIcon(Graphics& g, const RECT& rect, const Theme& t)
 {
-    const double cx = Dip(rect.left) + Dip(rect.right - rect.left) / 2;
-    const double cy = Dip(rect.top) + Dip(rect.bottom - rect.top) / 2 + 1;
-    const Color fg = t.fg;
-    SolidBrush brush(fg);
-    PointF leftEar[] = {
-        { static_cast<REAL>(Px(cx - 8)), static_cast<REAL>(Px(cy - 8)) },
-        { static_cast<REAL>(Px(cx - 4)), static_cast<REAL>(Px(cy - 11)) },
-        { static_cast<REAL>(Px(cx - 3)), static_cast<REAL>(Px(cy - 6)) },
+    const double size = 18;
+    const double left = Dip(rect.left) + (Dip(rect.right - rect.left) - size) / 2;
+    const double top = Dip(rect.top) + (Dip(rect.bottom - rect.top) - size) / 2 + 1;
+    const double unit = size / 16.0;
+    auto point = [&](double x, double y) {
+        return PointF(
+            static_cast<REAL>(Px(left + x * unit)),
+            static_cast<REAL>(Px(top + y * unit)));
     };
-    PointF rightEar[] = {
-        { static_cast<REAL>(Px(cx + 8)), static_cast<REAL>(Px(cy - 8)) },
-        { static_cast<REAL>(Px(cx + 4)), static_cast<REAL>(Px(cy - 11)) },
-        { static_cast<REAL>(Px(cx + 3)), static_cast<REAL>(Px(cy - 6)) },
+
+    // ponytail: embedded Octicons SVG path; adding an SVG renderer for one icon is not worth it.
+    GraphicsPath path(FillModeWinding);
+    double currentX = 8;
+    double currentY = 0;
+    auto curve = [&](double x1, double y1, double x2, double y2, double x3, double y3) {
+        path.AddBezier(point(currentX, currentY), point(x1, y1), point(x2, y2), point(x3, y3));
+        currentX = x3;
+        currentY = y3;
     };
-    g.FillPolygon(&brush, leftEar, 3);
-    g.FillPolygon(&brush, rightEar, 3);
-    g.FillEllipse(&brush, RectFOf(RectDip(cx - 9, cy - 9, 18, 18)));
-    DrawRounded(g, RectDip(cx - 5, cy + 4, 10, 7), 4, fg);
+    curve(3.58, 0, 0, 3.58, 0, 8);
+    curve(0, 11.54, 2.29, 14.53, 5.47, 15.59);
+    curve(5.87, 15.66, 6.02, 15.42, 6.02, 15.21);
+    curve(6.02, 15.02, 6.01, 14.39, 6.01, 13.72);
+    curve(4, 14.09, 3.48, 13.23, 3.32, 12.78);
+    curve(3.23, 12.55, 2.84, 11.84, 2.5, 11.65);
+    curve(2.22, 11.5, 1.82, 11.13, 2.49, 11.12);
+    curve(3.12, 11.11, 3.57, 11.7, 3.72, 11.94);
+    curve(4.44, 13.15, 5.59, 12.81, 6.05, 12.6);
+    curve(6.12, 12.08, 6.33, 11.73, 6.56, 11.53);
+    curve(4.78, 11.33, 2.92, 10.64, 2.92, 7.58);
+    curve(2.92, 6.71, 3.23, 5.99, 3.74, 5.43);
+    curve(3.66, 5.23, 3.38, 4.41, 3.82, 3.31);
+    curve(3.82, 3.31, 4.49, 3.1, 6.02, 4.13);
+    curve(6.66, 3.95, 7.34, 3.86, 8.02, 3.86);
+    curve(8.7, 3.86, 9.38, 3.95, 10.02, 4.13);
+    curve(11.55, 3.09, 12.22, 3.31, 12.22, 3.31);
+    curve(12.66, 4.41, 12.38, 5.23, 12.3, 5.43);
+    curve(12.81, 5.99, 13.12, 6.7, 13.12, 7.58);
+    curve(13.12, 10.65, 11.25, 11.33, 9.47, 11.53);
+    curve(9.76, 11.78, 10.01, 12.26, 10.01, 13.01);
+    curve(10.01, 14.08, 10, 14.94, 10, 15.21);
+    curve(10, 15.42, 10.15, 15.67, 10.55, 15.59);
+    curve(13.71, 14.53, 16, 11.53, 16, 8);
+    curve(16, 3.58, 12.42, 0, 8, 0);
+    path.CloseFigure();
+
+    SolidBrush brush(t.fg);
+    g.FillPath(&brush, &path);
 }
 
 void DrawSegment(Graphics& g, const RECT& rect, const std::wstring& text, bool active, const Theme& t)
@@ -1174,7 +1211,8 @@ void DrawLeftPane(Graphics& g, const Theme& t)
     const double cardX = 22;
     const double cardW = leftW - 44;
 
-    DrawTextBlock(g, L"Backdropper", RectDip(22, 61, 240, 28), 21, t.fg, FontStyleBold);
+    DrawTextBlock(g, L"Backdropper", RectDip(22, 61, 140, 28), 21, t.fg, FontStyleBold);
+    DrawTextBlock(g, (std::wstring(L"v") + kBackdropperVersion), RectDip(166, 69, 72, 16), 11, t.fg2);
     DrawTextBlock(g, L"PNG thumbnail background", RectDip(22, 91, 260, 20), 13, t.fg2);
 
     double cardY = 116;

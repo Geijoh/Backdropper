@@ -4,6 +4,14 @@ project(Backdropper LANGUAGES CXX RC)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION.md")
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/VERSION.md" BACKDROPPER_VERSION_MD)
+string(REGEX MATCH "Current version:[ \t]*([0-9]+\\.[0-9]+\\.[0-9]+)" _version_match "${BACKDROPPER_VERSION_MD}")
+set(BACKDROPPER_VERSION "${CMAKE_MATCH_1}")
+if(NOT BACKDROPPER_VERSION)
+  message(FATAL_ERROR "Could not read Current version from VERSION.md")
+endif()
+
 foreach(config Debug Release RelWithDebInfo MinSizeRel)
   string(TOUPPER "${config}" config_upper)
   set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_${config_upper} "${CMAKE_BINARY_DIR}/bin")
@@ -29,6 +37,7 @@ add_executable(BackdropperSettings WIN32
   src/common/thumbnail_cache.cpp
 )
 target_compile_definitions(BackdropperSettings PRIVATE UNICODE _UNICODE NOMINMAX)
+target_compile_definitions(BackdropperSettings PRIVATE BACKDROPPER_VERSION="${BACKDROPPER_VERSION}")
 target_include_directories(BackdropperSettings PRIVATE src/common src/resources)
 target_link_libraries(BackdropperSettings PRIVATE comctl32 shell32 shlwapi ole32 gdiplus dwmapi comdlg32)
 target_link_options(BackdropperSettings PRIVATE

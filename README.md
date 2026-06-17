@@ -4,11 +4,34 @@ Native Windows thumbnail utility for transparent images.
 
 Current build: PNG thumbnail handler only. It composites transparent PNG thumbnails over a solid/checker/none background in Explorer.
 
+[Download latest build](https://github.com/Geijoh/Backdropper/releases/latest)
+
+## System Requirements
+
+Runtime:
+
+- Windows 10 or Windows 11 desktop Explorer.
+- 64-bit Windows. The thumbnail handler must match Explorer's bitness.
+- Per-user registration writes to `HKCU\Software\Classes`; admin rights are not required for the normal dev registration path.
+- Settings are stored in `HKCU\Software\Backdropper`.
+
+Build:
+
+- Visual Studio 2022 Build Tools with Desktop development with C++.
+- CMake 3.24 or newer.
+- x64 build, matching the commands below.
+
 ## Screenshots
 
 ![Backdropper settings window](assets/screenshots/settings-main.png)
 
 ![Backdropper preview view menu](assets/screenshots/settings-view-menu.png)
+
+Refresh screenshots:
+
+```powershell
+.\tools\capture-screenshots.ps1
+```
 
 ## Build
 
