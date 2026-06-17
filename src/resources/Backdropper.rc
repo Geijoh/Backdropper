@@ -1,0 +1,3 @@
+#include "resource.h"
+
+IDI_BACKDROPPER ICON "..\\..\\assets\\icons\\backdropper.ico"

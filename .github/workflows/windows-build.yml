@@ -1,0 +1,30 @@
+name: Windows Build
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Configure
+        run: cmake -S . -B build -A x64
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Smoke test
+        run: .\build\bin\RenderSmoke.exe
+
+      - name: Upload binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: Backdropper-windows-x64
+          path: |
+            build/bin/BackdropperSettings.exe
+            build/bin/BackdropperThumb.dll
