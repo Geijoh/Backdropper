@@ -8,6 +8,7 @@
 #include <dwmapi.h>
 #include <gdiplus.h>
 #include <shlwapi.h>
+#include <urlmon.h>
 
 #include <algorithm>
 #include <array>
@@ -39,6 +40,7 @@ constexpr wchar_t kBackdropperVersion[] = WIDEN_TEXT(BACKDROPPER_VERSION);
 constexpr wchar_t kGithubUrl[] = L"https://github.com/Geijoh/Backdropper";
 constexpr wchar_t kPrivacyUrl[] = L"https://github.com/Geijoh/Backdropper/blob/main/PRIVACY.md";
 constexpr wchar_t kUpdaterScriptName[] = L"update-backdropper.ps1";
+constexpr wchar_t kLatestVersionUrl[] = L"https://github.com/Geijoh/Backdropper/releases/latest/download/backdropper-version.txt";
 
 enum class Hit {
     None,
@@ -56,6 +58,8 @@ enum class Hit {
     SizeDown,
     SizeUp,
     RestartToggle,
+    CheckUpdates,
+    InstallUpdate,
     ViewButton,
     About,
     AboutClose,
@@ -136,6 +140,8 @@ struct Layout {
     RECT sizeDown {};
     RECT sizeUp {};
     RECT restartToggle {};
+    RECT checkUpdatesBtn {};
+    RECT installUpdateBtn {};
     RECT viewButton {};
     RECT viewMenu {};
     std::array<RECT, 7> menuItems {};
@@ -169,6 +175,9 @@ struct AppState {
     ViewMode view = ViewMode::Large;
     std::wstring dialogTitle;
     std::wstring dialogBody;
+    std::wstring updateStatus;
+    std::wstring latestVersion;
+    bool updateAvailable = false;
     bool aboutOpen = false;
     bool syncingEdits = false;
 };
@@ -358,6 +367,13 @@ std::wstring UpdaterScriptPath()
     return path;
 }
 
+std::wstring TempUpdaterScriptPath()
+{
+    wchar_t tempDir[MAX_PATH] = {};
+    GetTempPathW(ARRAYSIZE(tempDir), tempDir);
+    return std::wstring(tempDir) + L"BackdropperUpdate-" + std::to_wstring(GetCurrentProcessId()) + L".ps1";
+}
+
 std::wstring QuoteArg(const std::wstring& value)
 {
     return std::wstring(L"\"") + value + L"\"";
@@ -373,8 +389,16 @@ bool LaunchUpdater(HWND owner)
         return false;
     }
 
+    const std::wstring tempScript = TempUpdaterScriptPath();
+    if (!CopyFileW(script.c_str(), tempScript.c_str(), FALSE)) {
+        g_state.aboutOpen = false;
+        OpenDialog(owner, L"Update failed",
+            L"Backdropper could not copy the updater to a temporary file.");
+        return false;
+    }
+
     const std::wstring args =
-        std::wstring(L"-NoProfile -ExecutionPolicy Bypass -File ") + QuoteArg(script)
+        std::wstring(L"-NoProfile -ExecutionPolicy Bypass -File ") + QuoteArg(tempScript)
         + L" -InstallDir " + QuoteArg(AppDirectory())
         + L" -CurrentPid " + std::to_wstring(GetCurrentProcessId())
         + L" -CurrentVersion " + QuoteArg(kBackdropperVersion);
@@ -395,6 +419,93 @@ bool LaunchUpdater(HWND owner)
     }
 
     return true;
+}
+
+std::wstring TrimVersion(std::wstring text)
+{
+    if (!text.empty() && text[0] == L'v') {
+        text.erase(text.begin());
+    }
+    while (!text.empty() && iswspace(text.front())) {
+        text.erase(text.begin());
+    }
+    while (!text.empty() && iswspace(text.back())) {
+        text.pop_back();
+    }
+    return text;
+}
+
+bool ParseVersion(const std::wstring& text, int parts[3])
+{
+    return swscanf_s(text.c_str(), L"%d.%d.%d", &parts[0], &parts[1], &parts[2]) == 3;
+}
+
+int CompareVersions(const std::wstring& left, const std::wstring& right)
+{
+    int a[3] = {};
+    int b[3] = {};
+    if (!ParseVersion(left, a) || !ParseVersion(right, b)) {
+        return 0;
+    }
+    for (int i = 0; i < 3; ++i) {
+        if (a[i] != b[i]) {
+            return a[i] < b[i] ? -1 : 1;
+        }
+    }
+    return 0;
+}
+
+bool ReadAsciiFile(const std::wstring& path, std::wstring* text)
+{
+    HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+
+    DWORD size = GetFileSize(file, nullptr);
+    if (size == INVALID_FILE_SIZE || size == 0 || size > 128) {
+        CloseHandle(file);
+        return false;
+    }
+
+    std::string bytes(size, '\0');
+    DWORD read = 0;
+    const bool ok = ReadFile(file, bytes.data(), size, &read, nullptr) && read == size;
+    CloseHandle(file);
+    if (!ok) {
+        return false;
+    }
+
+    text->assign(bytes.begin(), bytes.end());
+    return true;
+}
+
+bool FetchLatestVersion(std::wstring* version)
+{
+    wchar_t tempDir[MAX_PATH] = {};
+    wchar_t tempFile[MAX_PATH] = {};
+    if (!GetTempPathW(ARRAYSIZE(tempDir), tempDir)
+        || !GetTempFileNameW(tempDir, L"bdp", 0, tempFile)) {
+        return false;
+    }
+
+    const std::wstring url = std::wstring(kLatestVersionUrl) + L"?t=" + std::to_wstring(GetTickCount64());
+    const HRESULT hr = URLDownloadToFileW(nullptr, url.c_str(), tempFile, 0, nullptr);
+    if (FAILED(hr)) {
+        DeleteFileW(tempFile);
+        return false;
+    }
+
+    std::wstring text;
+    const bool ok = ReadAsciiFile(tempFile, &text);
+    DeleteFileW(tempFile);
+    if (!ok) {
+        return false;
+    }
+
+    *version = TrimVersion(text);
+    int parts[3] = {};
+    return ParseVersion(*version, parts);
 }
 
 bool RunRegsvr(HWND owner, bool unregister)
@@ -627,6 +738,11 @@ void CalculateLayout(HWND window)
 
     const double cacheY = cardY + 14;
     g_layout.restartToggle = RectDip(cardX + cardW - 19 - 40, cacheY + 32, 40, 20);
+    const double updateY = cacheY + 100;
+    g_layout.checkUpdatesBtn = RectDip(cardX + cardW - 19 - 70, updateY + 46, 70, 30);
+    if (g_state.updateAvailable) {
+        g_layout.installUpdateBtn = RectDip(cardX + cardW - 19 - 70, updateY + 13, 70, 30);
+    }
 
     const double footerY = h - 58;
     const double saveW = 70;
@@ -1554,6 +1670,19 @@ void DrawLeftPane(Graphics& g, const Theme& t)
     const double thumbX = Dip(g_layout.restartToggle.left) + (g_state.settings.deleteThumbnailDbsOnSave ? 22 : 4);
     DrawRounded(g, RectDip(thumbX, Dip(g_layout.restartToggle.top) + 4, 12, 12), 6,
         g_state.settings.deleteThumbnailDbsOnSave ? t.accentText : t.toggleOff);
+
+    const double updateY = nextY + 100;
+    DrawRoundedBorder(g, RectDip(cardX, updateY, cardW, 86), 7, t.card, t.cardBorder);
+    DrawTextBlock(g, L"Check for updates", RectDip(cardX + 19, updateY + 17, cardW - 120, 20), 14, t.fg, FontStyleBold);
+    const std::wstring status = g_state.updateStatus.empty()
+        ? std::wstring(L"Current version ") + kBackdropperVersion
+        : g_state.updateStatus;
+    DrawTextBlock(g, status, RectDip(cardX + 19, updateY + 42, cardW - 120, 34), 12.5f, t.fg2,
+        FontStyleRegular, StringAlignmentNear, StringAlignmentNear, true);
+    if (g_state.updateAvailable) {
+        DrawButton(g, g_layout.installUpdateBtn, L"Update", t, true, false, g_hover == Hit::InstallUpdate);
+    }
+    DrawButton(g, g_layout.checkUpdatesBtn, L"Check", t, false, false, g_hover == Hit::CheckUpdates);
 }
 
 void DrawRightPane(Graphics& g, const Theme& t)
@@ -1726,6 +1855,8 @@ Hit HitTest(POINT pt)
     if (PtIn(g_layout.sizeDown, pt)) return Hit::SizeDown;
     if (PtIn(g_layout.sizeUp, pt)) return Hit::SizeUp;
     if (PtIn(g_layout.restartToggle, pt)) return Hit::RestartToggle;
+    if (PtIn(g_layout.installUpdateBtn, pt)) return Hit::InstallUpdate;
+    if (PtIn(g_layout.checkUpdatesBtn, pt)) return Hit::CheckUpdates;
     if (PtIn(g_layout.viewButton, pt)) return Hit::ViewButton;
     if (PtIn(g_layout.aboutBtn, pt)) return Hit::About;
     if (PtIn(g_layout.registerBtn, pt)) return Hit::Register;
@@ -1817,6 +1948,32 @@ void SaveSettings(HWND window)
         OpenDialog(window, L"Settings saved",
             L"Settings saved to HKCU\\Software\\Backdropper. Existing thumbnails may keep their previous background until the thumbnail cache refreshes.");
     }
+}
+
+void CheckForUpdates(HWND window)
+{
+    SetCursor(LoadCursorW(nullptr, IDC_WAIT));
+    std::wstring latest;
+    const bool ok = FetchLatestVersion(&latest);
+    SetCursor(LoadCursorW(nullptr, IDC_ARROW));
+
+    if (!ok) {
+        g_state.updateAvailable = false;
+        g_state.latestVersion.clear();
+        g_state.updateStatus = L"Could not reach GitHub Releases.";
+    } else {
+        const int versionCompare = CompareVersions(latest, kBackdropperVersion);
+        g_state.latestVersion = latest;
+        g_state.updateAvailable = versionCompare > 0;
+        if (versionCompare > 0) {
+            g_state.updateStatus = std::wstring(L"Version ") + latest + L" is available.";
+        } else if (versionCompare < 0) {
+            g_state.updateStatus = std::wstring(L"Running newer than latest release: ") + latest + L".";
+        } else {
+            g_state.updateStatus = std::wstring(L"Up to date. Latest release: ") + latest + L".";
+        }
+    }
+    InvalidateRect(window, nullptr, TRUE);
 }
 
 void StepSize(HWND window, int delta)
@@ -1940,6 +2097,14 @@ void ActivateHit(HWND window, Hit hit)
         g_state.settings.deleteThumbnailDbsOnSave = !g_state.settings.deleteThumbnailDbsOnSave;
         InvalidateRect(window, nullptr, TRUE);
         break;
+    case Hit::CheckUpdates:
+        CheckForUpdates(window);
+        break;
+    case Hit::InstallUpdate:
+        if (LaunchUpdater(window)) {
+            DestroyWindow(window);
+        }
+        break;
     case Hit::ViewButton:
         g_state.viewMenuOpen = !g_state.viewMenuOpen;
         InvalidateRect(window, nullptr, TRUE);
@@ -2031,7 +2196,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
     case WM_GETMINMAXINFO: {
         auto* info = reinterpret_cast<MINMAXINFO*>(lparam);
         info->ptMinTrackSize.x = Px(760);
-        info->ptMinTrackSize.y = Px(540);
+        info->ptMinTrackSize.y = Px(620);
         return 0;
     }
 

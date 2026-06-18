@@ -10,7 +10,7 @@ Backdropper registers SVG, PDF, PDF-compatible AI, PSD, and TGA through built-in
 
 [Download latest build](https://github.com/Geijoh/Backdropper/releases/latest) | [Privacy policy](PRIVACY.md)
 
-Use **About > Update** in the app to check GitHub Releases, download the latest Windows x64 build, replace the current Backdropper files, and relaunch the app. The install folder must be writable by the current user.
+Use **Check for updates** in the app to check GitHub Releases. When a newer build is available, Backdropper can download the latest Windows x64 build, replace the current files, and relaunch. The install folder must be writable by the current user.
 
 ## System Requirements
 
@@ -80,7 +80,7 @@ SVG and PDF render through native Windows APIs. PDF-compatible AI uses the same 
 
 ## Update Script
 
-Release ZIPs include `update-backdropper.ps1`. The app uses this script for **About > Update**. It downloads the latest release ZIP, waits for the settings app to close, replaces files in-place, and starts Backdropper again. If Explorer or a thumbnail host has the handler DLL locked, the script restarts the shell thumbnail hosts and retries the replacement.
+Release ZIPs include `update-backdropper.ps1`. The app uses this script for update actions. It downloads the latest release ZIP, waits for the settings app to close, replaces files in-place, and starts Backdropper again. If Explorer or a thumbnail host has the handler DLL locked, the script restarts the shell thumbnail hosts and retries the replacement.
 
 ## Development Note
 

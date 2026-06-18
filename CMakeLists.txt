@@ -39,7 +39,7 @@ add_executable(BackdropperSettings WIN32
 target_compile_definitions(BackdropperSettings PRIVATE UNICODE _UNICODE NOMINMAX)
 target_compile_definitions(BackdropperSettings PRIVATE BACKDROPPER_VERSION="${BACKDROPPER_VERSION}")
 target_include_directories(BackdropperSettings PRIVATE src/common src/resources)
-target_link_libraries(BackdropperSettings PRIVATE comctl32 shell32 shlwapi ole32 gdiplus dwmapi comdlg32)
+target_link_libraries(BackdropperSettings PRIVATE comctl32 shell32 shlwapi ole32 gdiplus dwmapi comdlg32 urlmon)
 target_link_options(BackdropperSettings PRIVATE
   "/MANIFESTDEPENDENCY:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'"
 )
