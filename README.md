@@ -56,6 +56,22 @@ cmake --build build --config Release
 .\build\bin\RenderSmoke.exe
 ```
 
+## Release Signing
+
+GitHub Actions signs release binaries with Azure Artifact Signing on pushes to `main`.
+
+Repository variables:
+
+- `AZURE_ARTIFACT_SIGNING_ENDPOINT`
+- `AZURE_ARTIFACT_SIGNING_ACCOUNT_NAME`
+- `AZURE_ARTIFACT_SIGNING_CERTIFICATE_PROFILE_NAME`
+
+Repository secrets:
+
+- `AZURE_CLIENT_ID`
+- `AZURE_TENANT_ID`
+- `AZURE_SUBSCRIPTION_ID`
+
 ## Try in Explorer
 
 ```powershell
