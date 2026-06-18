@@ -1,5 +1,7 @@
 # Backdropper
 
+![GitHub Downloads (all assets, all releases)](https://img.shields.io/github/downloads/Geijoh/Backdropper/total)
+
 Native Windows thumbnail utility for transparent images.
 
 Current build: WIC-backed thumbnail handler with native SVG/PDF rendering plus built-in PSD and TGA fallback decoding. It composites transparent thumbnails over a solid/checker/none background in Explorer.
@@ -8,7 +10,7 @@ Supported/targeted extensions: `.png`, `.webp`, `.gif`, `.ico`, `.svg`, `.psd`, 
 
 Backdropper registers SVG, PDF, PDF-compatible AI, PSD, and TGA through built-in fallback renderers. EPS/PostScript AI register when Ghostscript is installed. Other formats are registered only when Windows has an installed Windows Imaging Component decoder, so unsupported formats keep their existing Explorer behavior.
 
-[Download latest build](https://github.com/Geijoh/Backdropper/releases/latest) ![GitHub Downloads (all assets, all releases)](https://img.shields.io/github/downloads/Geijoh/Backdropper/total) | [Privacy policy](PRIVACY.md)
+[Download latest build](https://github.com/Geijoh/Backdropper/releases/latest) | [Privacy policy](PRIVACY.md)
 
 Release builds are code-signed with Azure Artifact Signing.
 
