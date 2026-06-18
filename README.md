@@ -62,15 +62,14 @@ GitHub Actions signs release binaries with Azure Artifact Signing on pushes to `
 
 Repository variables:
 
+- `AZURE_CLIENT_ID`
+- `AZURE_TENANT_ID`
+- `AZURE_SUBSCRIPTION_ID`
 - `AZURE_ARTIFACT_SIGNING_ENDPOINT`
 - `AZURE_ARTIFACT_SIGNING_ACCOUNT_NAME`
 - `AZURE_ARTIFACT_SIGNING_CERTIFICATE_PROFILE_NAME`
 
-Repository secrets:
-
-- `AZURE_CLIENT_ID`
-- `AZURE_TENANT_ID`
-- `AZURE_SUBSCRIPTION_ID`
+No committed `metadata.json` is required.
 
 ## Try in Explorer
 
