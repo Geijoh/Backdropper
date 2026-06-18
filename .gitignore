@@ -10,3 +10,5 @@ CMakeUserPresets.json
 *.VC.db
 *.VC.VC.opendb
 *.log
+*.aip
+Backdropper-SetupFiles/
