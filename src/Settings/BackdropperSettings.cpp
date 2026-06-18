@@ -360,14 +360,57 @@ std::wstring ExtensionHandlerPath(const wchar_t* extension)
     return std::wstring(L"Software\\Classes\\") + extension + L"\\shellex\\" + kThumbHandlerKey;
 }
 
+std::wstring ClassesExtensionHandlerPath(const wchar_t* extension)
+{
+    return std::wstring(extension) + L"\\shellex\\" + kThumbHandlerKey;
+}
+
+std::wstring ClassesProgIdHandlerPath(const std::wstring& progId)
+{
+    return progId + L"\\shellex\\" + kThumbHandlerKey;
+}
+
+std::wstring ClsidInprocPath()
+{
+    return std::wstring(L"Software\\Classes\\CLSID\\") + kBackdropperClsid + L"\\InprocServer32";
+}
+
+bool ReadStringValue(HKEY root, const std::wstring& path, const wchar_t* name, std::wstring* value)
+{
+    wchar_t buffer[MAX_PATH] = {};
+    DWORD bytes = sizeof(buffer);
+    if (RegGetValueW(root, path.c_str(), name, RRF_RT_REG_SZ, nullptr, buffer, &bytes) != ERROR_SUCCESS) {
+        return false;
+    }
+    *value = buffer;
+    return true;
+}
+
+bool EffectiveHandlerIsBackdropper(const wchar_t* extension)
+{
+    std::wstring value;
+    if (ReadStringValue(HKEY_CLASSES_ROOT, ClassesExtensionHandlerPath(extension), nullptr, &value)
+        && _wcsicmp(value.c_str(), kBackdropperClsid) == 0) {
+        return true;
+    }
+
+    std::wstring progId;
+    return ReadStringValue(HKEY_CLASSES_ROOT, extension, nullptr, &progId)
+        && !progId.empty()
+        && ReadStringValue(HKEY_CLASSES_ROOT, ClassesProgIdHandlerPath(progId), nullptr, &value)
+        && _wcsicmp(value.c_str(), kBackdropperClsid) == 0;
+}
+
 bool IsBackdropperHandlerRegistered()
 {
-    wchar_t value[128] = {};
+    std::wstring inproc;
+    if (!ReadStringValue(HKEY_CURRENT_USER, ClsidInprocPath(), nullptr, &inproc)
+        || _wcsicmp(inproc.c_str(), DllPath().c_str()) != 0) {
+        return false;
+    }
+
     for (const wchar_t* extension : kExtensions) {
-        DWORD bytes = sizeof(value);
-        if (RegGetValueW(HKEY_CURRENT_USER, ExtensionHandlerPath(extension).c_str(), nullptr,
-                RRF_RT_REG_SZ, nullptr, value, &bytes) == ERROR_SUCCESS
-            && _wcsicmp(value, kBackdropperClsid) == 0) {
+        if (EffectiveHandlerIsBackdropper(extension)) {
             return true;
         }
     }

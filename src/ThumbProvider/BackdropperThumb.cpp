@@ -47,6 +47,21 @@ std::wstring ExtensionHandlerPath(const wchar_t* extension)
     return std::wstring(L"Software\\Classes\\") + extension + L"\\shellex\\" + kThumbHandlerKey;
 }
 
+std::wstring ClassesExtensionHandlerPath(const wchar_t* extension)
+{
+    return std::wstring(extension) + L"\\shellex\\" + kThumbHandlerKey;
+}
+
+std::wstring ProgIdHandlerPath(const std::wstring& progId)
+{
+    return std::wstring(L"Software\\Classes\\") + progId + L"\\shellex\\" + kThumbHandlerKey;
+}
+
+std::wstring ClassesProgIdHandlerPath(const std::wstring& progId)
+{
+    return progId + L"\\shellex\\" + kThumbHandlerKey;
+}
+
 std::wstring BackupPath(const wchar_t* extension)
 {
     return std::wstring(L"Software\\Backdropper\\Backup\\") + extension;
@@ -84,6 +99,23 @@ bool ReadStringValue(HKEY root, const std::wstring& path, const wchar_t* name, s
 
     *value = buffer;
     return true;
+}
+
+bool ReadDwordValue(HKEY root, const std::wstring& path, const wchar_t* name, DWORD* value)
+{
+    DWORD bytes = sizeof(*value);
+    return RegGetValueW(root, path.c_str(), name, RRF_RT_REG_DWORD, nullptr, value, &bytes) == ERROR_SUCCESS;
+}
+
+void WriteBackupString(HKEY key, const wchar_t* name, const std::wstring& value)
+{
+    RegSetValueExW(key, name, 0, REG_SZ, reinterpret_cast<const BYTE*>(value.c_str()),
+        static_cast<DWORD>((value.size() + 1) * sizeof(wchar_t)));
+}
+
+void WriteBackupDword(HKEY key, const wchar_t* name, DWORD value)
+{
+    RegSetValueExW(key, name, 0, REG_DWORD, reinterpret_cast<const BYTE*>(&value), sizeof(value));
 }
 
 std::wstring Lower(std::wstring value)
@@ -195,6 +227,13 @@ bool HasGhostscript()
         || findUnder(L"C:\\Program Files (x86)\\gs", L"gswin32c.exe");
 }
 
+std::wstring EffectiveProgIdForExtension(const wchar_t* extension)
+{
+    std::wstring progId;
+    ReadStringValue(HKEY_CLASSES_ROOT, extension, nullptr, &progId);
+    return progId;
+}
+
 bool CanRegisterExtension(const wchar_t* extension)
 {
     if (wcscmp(extension, L".eps") == 0) {
@@ -207,37 +246,66 @@ bool CanRegisterExtension(const wchar_t* extension)
 void SavePreviousHandler(const wchar_t* extension)
 {
     HKEY backup = nullptr;
-    if (RegOpenKeyExW(HKEY_CURRENT_USER, BackupPath(extension).c_str(), 0, KEY_READ, &backup) == ERROR_SUCCESS) {
-        RegCloseKey(backup);
+    if (RegCreateKeyExW(HKEY_CURRENT_USER, BackupPath(extension).c_str(), 0, nullptr, 0, KEY_READ | KEY_WRITE,
+            nullptr, &backup, nullptr) != ERROR_SUCCESS) {
         return;
     }
 
-    HKEY key = nullptr;
-    if (RegCreateKeyExW(HKEY_CURRENT_USER, BackupPath(extension).c_str(), 0, nullptr, 0, KEY_WRITE, nullptr, &key, nullptr) != ERROR_SUCCESS) {
-        return;
+    DWORD hadValue = 0;
+    if (!ReadDwordValue(HKEY_CURRENT_USER, BackupPath(extension), L"HadValue", &hadValue)) {
+        std::wstring previous;
+        hadValue = ReadStringValue(HKEY_CLASSES_ROOT, ClassesExtensionHandlerPath(extension), nullptr, &previous) ? 1 : 0;
+        if (hadValue && _wcsicmp(previous.c_str(), kClsidString) == 0) {
+            hadValue = 0;
+        }
+        WriteBackupDword(backup, L"HadValue", hadValue);
+        if (hadValue) {
+            WriteBackupString(backup, L"Value", previous);
+        }
     }
 
+    std::wstring progId;
+    if (!ReadStringValue(HKEY_CURRENT_USER, BackupPath(extension), L"ProgId", &progId)) {
+        progId = EffectiveProgIdForExtension(extension);
+        if (!progId.empty()) {
+            WriteBackupString(backup, L"ProgId", progId);
+
+            std::wstring previous;
+            DWORD hadProgIdValue = ReadStringValue(HKEY_CLASSES_ROOT, ClassesProgIdHandlerPath(progId), nullptr, &previous) ? 1 : 0;
+            if (hadProgIdValue && _wcsicmp(previous.c_str(), kClsidString) == 0) {
+                hadProgIdValue = 0;
+            }
+            WriteBackupDword(backup, L"HadProgIdValue", hadProgIdValue);
+            if (hadProgIdValue) {
+                WriteBackupString(backup, L"ProgIdValue", previous);
+            }
+        }
+    }
+
+    RegCloseKey(backup);
+}
+
+void RestoreHandlerValue(const std::wstring& path, DWORD hadValue, const wchar_t* backupName, const wchar_t* backupValue)
+{
     std::wstring previous;
-    const DWORD hadValue = ReadStringValue(HKEY_CURRENT_USER, ExtensionHandlerPath(extension), nullptr, &previous) ? 1 : 0;
-    RegSetValueExW(key, L"HadValue", 0, REG_DWORD, reinterpret_cast<const BYTE*>(&hadValue), sizeof(hadValue));
-    if (hadValue) {
-        RegSetValueExW(key, L"Value", 0, REG_SZ, reinterpret_cast<const BYTE*>(previous.c_str()),
-            static_cast<DWORD>((previous.size() + 1) * sizeof(wchar_t)));
+    if (hadValue && ReadStringValue(HKEY_CURRENT_USER, backupName, backupValue, &previous)) {
+        SetStringValue(HKEY_CURRENT_USER, path, nullptr, previous);
+    } else {
+        SHDeleteKeyW(HKEY_CURRENT_USER, path.c_str());
     }
-    RegCloseKey(key);
 }
 
 void RestorePreviousHandler(const wchar_t* extension)
 {
     DWORD hadValue = 0;
-    DWORD bytes = sizeof(hadValue);
-    RegGetValueW(HKEY_CURRENT_USER, BackupPath(extension).c_str(), L"HadValue", RRF_RT_REG_DWORD, nullptr, &hadValue, &bytes);
+    ReadDwordValue(HKEY_CURRENT_USER, BackupPath(extension), L"HadValue", &hadValue);
+    RestoreHandlerValue(ExtensionHandlerPath(extension), hadValue, BackupPath(extension).c_str(), L"Value");
 
-    std::wstring previous;
-    if (hadValue && ReadStringValue(HKEY_CURRENT_USER, BackupPath(extension), L"Value", &previous)) {
-        SetStringValue(HKEY_CURRENT_USER, ExtensionHandlerPath(extension), nullptr, previous);
-    } else {
-        SHDeleteKeyW(HKEY_CURRENT_USER, ExtensionHandlerPath(extension).c_str());
+    std::wstring progId;
+    if (ReadStringValue(HKEY_CURRENT_USER, BackupPath(extension), L"ProgId", &progId)) {
+        DWORD hadProgIdValue = 0;
+        ReadDwordValue(HKEY_CURRENT_USER, BackupPath(extension), L"HadProgIdValue", &hadProgIdValue);
+        RestoreHandlerValue(ProgIdHandlerPath(progId), hadProgIdValue, BackupPath(extension).c_str(), L"ProgIdValue");
     }
 
     SHDeleteKeyW(HKEY_CURRENT_USER, BackupPath(extension).c_str());
@@ -273,6 +341,14 @@ HRESULT RegisterServer()
         hr = SetStringValue(HKEY_CURRENT_USER, ExtensionHandlerPath(extension), nullptr, kClsidString);
         if (FAILED(hr)) {
             return hr;
+        }
+
+        const std::wstring progId = EffectiveProgIdForExtension(extension);
+        if (!progId.empty()) {
+            hr = SetStringValue(HKEY_CURRENT_USER, ProgIdHandlerPath(progId), nullptr, kClsidString);
+            if (FAILED(hr)) {
+                return hr;
+            }
         }
         registeredAny = true;
     }

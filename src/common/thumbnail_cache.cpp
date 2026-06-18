@@ -5,6 +5,8 @@
 #include <shellapi.h>
 #include <shlobj.h>
 
+#include <string>
+
 namespace {
 
 bool RunHidden(const wchar_t* file, wchar_t* args)
@@ -25,6 +27,36 @@ bool RunHidden(const wchar_t* file, wchar_t* args)
     GetExitCodeProcess(info.hProcess, &exitCode);
     CloseHandle(info.hProcess);
     return exitCode == 0;
+}
+
+bool WaitForShellWindow(bool present, DWORD timeoutMs)
+{
+    const DWORD start = GetTickCount();
+    do {
+        const bool found = FindWindowW(L"Shell_TrayWnd", nullptr) != nullptr;
+        if (found == present) {
+            return true;
+        }
+        Sleep(100);
+    } while (GetTickCount() - start < timeoutMs);
+    return false;
+}
+
+bool StartExplorerShell()
+{
+    wchar_t windowsDir[MAX_PATH] = {};
+    if (!GetWindowsDirectoryW(windowsDir, ARRAYSIZE(windowsDir))) {
+        return false;
+    }
+
+    const std::wstring explorer = std::wstring(windowsDir) + L"\\explorer.exe";
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        const HINSTANCE result = ShellExecuteW(nullptr, L"open", explorer.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        if (reinterpret_cast<INT_PTR>(result) > 32 && WaitForShellWindow(true, 5000)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 int DeleteThumbcacheDbs()
@@ -66,17 +98,22 @@ std::wstring ForceDeleteThumbcacheDbs()
     // ponytail: Explorer keeps thumbnails in memory; restart first so DB deletion actually sticks.
     wchar_t killArgs[] = L"/f /t /im explorer.exe";
     RunHidden(L"taskkill.exe", killArgs);
+    WaitForShellWindow(false, 5000);
 
     int failures = DeleteThumbcacheDbs();
     if (failures < 0) {
-        ShellExecuteW(nullptr, L"open", L"explorer.exe", nullptr, nullptr, SW_SHOWNORMAL);
+        StartExplorerShell();
         return L"Could not find the thumbnail cache folder.";
     }
 
-    ShellExecuteW(nullptr, L"open", L"explorer.exe", nullptr, nullptr, SW_SHOWNORMAL);
+    const bool restarted = StartExplorerShell();
     SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, nullptr, nullptr);
 
-    return failures == 0
-        ? L"Explorer was restarted and thumbnail cache DB files were deleted."
-        : L"Explorer was restarted, but some thumbnail cache DB files could not be deleted.";
+    if (!restarted) {
+        return L"Thumbnail cache DB files were deleted, but Explorer did not restart automatically.";
+    }
+    if (failures == 0) {
+        return L"Explorer was restarted and thumbnail cache DB files were deleted.";
+    }
+    return L"Explorer was restarted, but some thumbnail cache DB files could not be deleted.";
 }

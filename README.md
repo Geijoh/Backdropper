@@ -61,6 +61,12 @@ cmake --build build --config Release
 
 Open `build\bin\BackdropperSettings.exe` to change background settings or unregister.
 
+Check the active thumbnail registration:
+
+```powershell
+.\tools\check-registration.ps1
+```
+
 ## Unregister
 
 ```powershell
