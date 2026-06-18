@@ -15,6 +15,9 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdlib>
+#include <cwchar>
+#include <cwctype>
 #include <fstream>
 #include <iterator>
 #include <sstream>
@@ -110,6 +113,23 @@ enum class ViewMode {
 constexpr std::array<ViewMode, 7> kViewMenuOrder = {
     ViewMode::ExtraLarge, ViewMode::Large, ViewMode::Medium, ViewMode::Small,
     ViewMode::List, ViewMode::Details, ViewMode::Tiles
+};
+
+enum class FluentIcon {
+    Add,
+    Checkmark,
+    ChevronDown,
+    ChevronRight,
+    ChevronUp,
+    Dismiss,
+    Folder,
+    Grid,
+    Info,
+    Maximize,
+    Shield,
+    Subtract,
+    WeatherMoon,
+    WeatherSunny,
 };
 
 enum class AboutActionIcon {
@@ -1108,21 +1128,200 @@ void DrawRectLine(Graphics& g, const RECT& rect, const Color& color, float width
     g.DrawRectangle(&pen, rect.left, rect.top, rect.right - rect.left - 1, rect.bottom - rect.top - 1);
 }
 
+struct FluentSvg {
+    double viewBox;
+    const wchar_t* path;
+};
+
+FluentSvg FluentSvgData(FluentIcon icon)
+{
+    // Source: microsoft/fluentui-system-icons, MIT, assets/*/SVG/ic_fluent_*.svg.
+    switch (icon) {
+    case FluentIcon::Add:
+        return { 20, LR"(M10 2.5C10.2761 2.5 10.5 2.72386 10.5 3V9.5H17C17.2761 9.5 17.5 9.72386 17.5 10C17.5 10.2761 17.2761 10.5 17 10.5H10.5V17C10.5 17.2761 10.2761 17.5 10 17.5C9.72386 17.5 9.5 17.2761 9.5 17V10.5H3C2.72386 10.5 2.5 10.2761 2.5 10C2.5 9.72386 2.72386 9.5 3 9.5H9.5V3C9.5 2.72386 9.72386 2.5 10 2.5Z)" };
+    case FluentIcon::Checkmark:
+        return { 16, LR"(M13.8639 3.65511C14.0533 3.85606 14.0439 4.17251 13.8429 4.36191L5.91309 11.8358C5.67573 12.0595 5.30311 12.0526 5.07417 11.8203L2.39384 9.09995C2.20003 8.90325 2.20237 8.58667 2.39907 8.39286C2.59578 8.19905 2.91235 8.2014 3.10616 8.3981L5.51192 10.8398L13.1571 3.63419C13.358 3.44479 13.6745 3.45416 13.8639 3.65511Z)" };
+    case FluentIcon::ChevronDown:
+        return { 16, LR"(M3.14645 5.64645C3.34171 5.45118 3.65829 5.45118 3.85355 5.64645L8 9.79289L12.1464 5.64645C12.3417 5.45118 12.6583 5.45118 12.8536 5.64645C13.0488 5.84171 13.0488 6.15829 12.8536 6.35355L8.35355 10.8536C8.15829 11.0488 7.84171 11.0488 7.64645 10.8536L3.14645 6.35355C2.95118 6.15829 2.95118 5.84171 3.14645 5.64645Z)" };
+    case FluentIcon::ChevronRight:
+        return { 16, LR"(M5.64645 3.14645C5.45118 3.34171 5.45118 3.65829 5.64645 3.85355L9.79289 8L5.64645 12.1464C5.45118 12.3417 5.45118 12.6583 5.64645 12.8536C5.84171 13.0488 6.15829 13.0488 6.35355 12.8536L10.8536 8.35355C11.0488 8.15829 11.0488 7.84171 10.8536 7.64645L6.35355 3.14645C6.15829 2.95118 5.84171 2.95118 5.64645 3.14645Z)" };
+    case FluentIcon::ChevronUp:
+        return { 16, LR"(M3.14645 10.3536C3.34171 10.5488 3.65829 10.5488 3.85355 10.3536L8 6.20711L12.1464 10.3536C12.3417 10.5488 12.6583 10.5488 12.8536 10.3536C13.0488 10.1583 13.0488 9.84171 12.8536 9.64645L8.35355 5.14645C8.15829 4.95118 7.84171 4.95118 7.64645 5.14645L3.14645 9.64645C2.95118 9.84171 2.95118 10.1583 3.14645 10.3536Z)" };
+    case FluentIcon::Dismiss:
+        return { 20, LR"(M4.08859 4.21569L4.14645 4.14645C4.32001 3.97288 4.58944 3.9536 4.78431 4.08859L4.85355 4.14645L10 9.293L15.1464 4.14645C15.32 3.97288 15.5894 3.9536 15.7843 4.08859L15.8536 4.14645C16.0271 4.32001 16.0464 4.58944 15.9114 4.78431L15.8536 4.85355L10.707 10L15.8536 15.1464C16.0271 15.32 16.0464 15.5894 15.9114 15.7843L15.8536 15.8536C15.68 16.0271 15.4106 16.0464 15.2157 15.9114L15.1464 15.8536L10 10.707L4.85355 15.8536C4.67999 16.0271 4.41056 16.0464 4.21569 15.9114L4.14645 15.8536C3.97288 15.68 3.9536 15.4106 4.08859 15.2157L4.14645 15.1464L9.293 10L4.14645 4.85355C3.97288 4.67999 3.9536 4.41056 4.08859 4.21569L4.14645 4.14645L4.08859 4.21569Z)" };
+    case FluentIcon::Folder:
+        return { 20, LR"(M2 5.5C2 4.11929 3.11929 3 4.5 3H6.98223C7.44636 3 7.89148 3.18437 8.21967 3.51256L9.5 4.79289L7.43934 6.85355C7.34557 6.94732 7.21839 7 7.08579 7H2V5.5ZM2 8V14.5C2 15.8807 3.11929 17 4.5 17H15.5C16.8807 17 18 15.8807 18 14.5V7.5C18 6.11929 16.8807 5 15.5 5H10.7071L8.14645 7.56066C7.86514 7.84196 7.48361 8 7.08579 8H2Z)" };
+    case FluentIcon::Grid:
+        return { 20, LR"(M7.5 11C8.32843 11 9 11.6716 9 12.5V16.5C9 17.3284 8.32843 18 7.5 18H3.5C2.67157 18 2 17.3284 2 16.5V12.5C2 11.6716 2.67157 11 3.5 11H7.5ZM16.5 11C17.3284 11 18 11.6716 18 12.5V16.5C18 17.3284 17.3284 18 16.5 18H12.5C11.6716 18 11 17.3284 11 16.5V12.5C11 11.6716 11.6716 11 12.5 11H16.5ZM7.5 2C8.32843 2 9 2.67157 9 3.5V7.5C9 8.32843 8.32843 9 7.5 9H3.5C2.67157 9 2 8.32843 2 7.5V3.5C2 2.67157 2.67157 2 3.5 2H7.5ZM16.5 2C17.3284 2 18 2.67157 18 3.5V7.5C18 8.32843 17.3284 9 16.5 9H12.5C11.6716 9 11 8.32843 11 7.5V3.5C11 2.67157 11.6716 2 12.5 2H16.5Z)" };
+    case FluentIcon::Info:
+        return { 20, LR"(M10.4921 8.91012C10.4497 8.67687 10.2456 8.49999 10.0001 8.49999C9.72397 8.49999 9.50011 8.72385 9.50011 8.99999V13.5021L9.50817 13.592C9.55051 13.8253 9.75465 14.0021 10.0001 14.0021C10.2763 14.0021 10.5001 13.7783 10.5001 13.5021V8.99999L10.4921 8.91012ZM10.7988 6.74999C10.7988 6.33578 10.463 5.99999 10.0488 5.99999C9.63461 5.99999 9.29883 6.33578 9.29883 6.74999C9.29883 7.16421 9.63461 7.49999 10.0488 7.49999C10.463 7.49999 10.7988 7.16421 10.7988 6.74999ZM18 10C18 5.58172 14.4183 2 10 2C5.58172 2 2 5.58172 2 10C2 14.4183 5.58172 18 10 18C14.4183 18 18 14.4183 18 10ZM3 10C3 6.13401 6.13401 3 10 3C13.866 3 17 6.13401 17 10C17 13.866 13.866 17 10 17C6.13401 17 3 13.866 3 10Z)" };
+    case FluentIcon::Maximize:
+        return { 20, LR"(M3 5C3 3.89543 3.89543 3 5 3H15C16.1046 3 17 3.89543 17 5V15C17 16.1046 16.1046 17 15 17H5C3.89543 17 3 16.1046 3 15V5ZM5 4C4.44772 4 4 4.44772 4 5V15C4 15.5523 4.44772 16 5 16H15C15.5523 16 16 15.5523 16 15V5C16 4.44772 15.5523 4 15 4H5Z)" };
+    case FluentIcon::Shield:
+        return { 20, LR"(M9.72265 2.08397C9.8906 1.97201 10.1094 1.97201 10.2774 2.08397C12.2155 3.3761 14.3117 4.1823 16.5707 4.50503C16.817 4.54021 17 4.75117 17 5V9.5C17 13.3913 14.693 16.2307 10.1795 17.9667C10.064 18.0111 9.93605 18.0111 9.82051 17.9667C5.30699 16.2307 3 13.3913 3 9.5V5C3 4.75117 3.18296 4.54021 3.42929 4.50503C5.68833 4.1823 7.78446 3.3761 9.72265 2.08397ZM9.59914 3.34583C7.85275 4.39606 5.98541 5.09055 4 5.42787V9.5C4 12.892 5.96795 15.3634 10 16.9632C14.0321 15.3634 16 12.892 16 9.5V5.42787C14.0146 5.09055 12.1473 4.39606 10.4009 3.34583L10 3.09715L9.59914 3.34583Z)" };
+    case FluentIcon::Subtract:
+        return { 20, LR"(M3 10C3 9.72386 3.22386 9.5 3.5 9.5H16.5C16.7761 9.5 17 9.72386 17 10C17 10.2761 16.7761 10.5 16.5 10.5H3.5C3.22386 10.5 3 10.2761 3 10Z)" };
+    case FluentIcon::WeatherMoon:
+        return { 20, LR"(M15.4932 13.4967C13.5653 16.8358 9.2957 17.9798 5.95663 16.052C5.20013 15.6152 4.54451 15.0515 4.01047 14.3887C6.8412 13.3015 8.56844 11.9681 9.60339 9.99249C10.651 7.99273 10.9395 5.83183 10.3628 3.08319C11.2605 3.20148 12.1328 3.49537 12.9378 3.96018C16.2769 5.88799 17.421 10.1576 15.4932 13.4967ZM5.45663 16.918C9.27399 19.122 14.1552 17.8141 16.3592 13.9967C18.5631 10.1793 17.2552 5.2981 13.4378 3.09415C12.3371 2.45863 11.1233 2.10173 9.88082 2.03507C9.4801 2.01357 9.17217 2.38477 9.26732 2.77462C9.95545 5.59395 9.70125 7.65076 8.71759 9.52844C7.78322 11.312 6.17301 12.559 3.16661 13.635C2.79667 13.7674 2.65251 14.2143 2.87537 14.538C3.54192 15.5059 4.41706 16.3178 5.45663 16.918Z)" };
+    case FluentIcon::WeatherSunny:
+        return { 20, LR"(M10 2C10.2761 2 10.5 2.22386 10.5 2.5V3.5C10.5 3.77614 10.2761 4 10 4C9.72386 4 9.5 3.77614 9.5 3.5V2.5C9.5 2.22386 9.72386 2 10 2ZM10 14C12.2091 14 14 12.2091 14 10C14 7.79086 12.2091 6 10 6C7.79086 6 6 7.79086 6 10C6 12.2091 7.79086 14 10 14ZM10 13C8.34315 13 7 11.6569 7 10C7 8.34315 8.34315 7 10 7C11.6569 7 13 8.34315 13 10C13 11.6569 11.6569 13 10 13ZM17.5 10.5C17.7761 10.5 18 10.2761 18 10C18 9.72386 17.7761 9.5 17.5 9.5H16.5C16.2239 9.5 16 9.72386 16 10C16 10.2761 16.2239 10.5 16.5 10.5H17.5ZM10 16C10.2761 16 10.5 16.2239 10.5 16.5V17.5C10.5 17.7761 10.2761 18 10 18C9.72386 18 9.5 17.7761 9.5 17.5V16.5C9.5 16.2239 9.72386 16 10 16ZM3.5 10.5C3.77614 10.5 4 10.2761 4 10C4 9.72386 3.77614 9.5 3.5 9.5H2.46289C2.18675 9.5 1.96289 9.72386 1.96289 10C1.96289 10.2761 2.18675 10.5 2.46289 10.5H3.5ZM4.14645 4.14645C4.34171 3.95118 4.65829 3.95118 4.85355 4.14645L5.85355 5.14645C6.04882 5.34171 6.04882 5.65829 5.85355 5.85355C5.65829 6.04882 5.34171 6.04882 5.14645 5.85355L4.14645 4.85355C3.95118 4.65829 3.95118 4.34171 4.14645 4.14645ZM4.85355 15.8536C4.65829 16.0488 4.34171 16.0488 4.14645 15.8536C3.95118 15.6583 3.95118 15.3417 4.14645 15.1464L5.14645 14.1464C5.34171 13.9512 5.65829 13.9512 5.85355 14.1464C6.04882 14.3417 6.04882 14.6583 5.85355 14.8536L4.85355 15.8536ZM15.8536 4.14645C15.6583 3.95118 15.3417 3.95118 15.1464 4.14645L14.1464 5.14645C13.9512 5.34171 13.9512 5.65829 14.1464 5.85355C14.3417 6.04882 14.6583 6.04882 14.8536 5.85355L15.8536 4.85355C16.0488 4.65829 16.0488 4.34171 15.8536 4.14645ZM15.1464 15.8536C15.3417 16.0488 15.6583 16.0488 15.8536 15.8536C16.0488 15.6583 16.0488 15.3417 15.8536 15.1464L14.8536 14.1464C14.6583 13.9512 14.3417 13.9512 14.1464 14.1464C13.9512 14.3417 13.9512 14.6583 14.1464 14.8536L15.1464 15.8536Z)" };
+    }
+    return { 20, L"" };
+}
+
+bool IsSvgCommand(wchar_t ch)
+{
+    return (ch >= L'A' && ch <= L'Z') || (ch >= L'a' && ch <= L'z');
+}
+
+void SkipSvgSeparators(const wchar_t*& cursor)
+{
+    while (*cursor == L',' || iswspace(*cursor)) {
+        ++cursor;
+    }
+}
+
+bool ReadSvgNumber(const wchar_t*& cursor, double& value)
+{
+    SkipSvgSeparators(cursor);
+    if (!*cursor || IsSvgCommand(*cursor)) {
+        return false;
+    }
+    wchar_t* end = nullptr;
+    value = wcstod(cursor, &end);
+    if (end == cursor) {
+        return false;
+    }
+    cursor = end;
+    return true;
+}
+
+void DrawFluentIcon(Graphics& g, const RECT& rect, FluentIcon icon, const Color& color)
+{
+    const FluentSvg svg = FluentSvgData(icon);
+    const double boxW = Dip(rect.right - rect.left);
+    const double boxH = Dip(rect.bottom - rect.top);
+    const double size = std::min(boxW, boxH);
+    const double x = Dip(rect.left) + (boxW - size) / 2;
+    const double y = Dip(rect.top) + (boxH - size) / 2;
+    const double scale = size / svg.viewBox;
+
+    auto point = [&](double px, double py) {
+        return PointF(static_cast<REAL>(Px(x + px * scale)), static_cast<REAL>(Px(y + py * scale)));
+    };
+
+    GraphicsPath path(FillModeWinding);
+    const wchar_t* cursor = svg.path;
+    wchar_t command = 0;
+    double cx = 0;
+    double cy = 0;
+    double sx = 0;
+    double sy = 0;
+    bool havePoint = false;
+
+    while (*cursor) {
+        SkipSvgSeparators(cursor);
+        if (IsSvgCommand(*cursor)) {
+            command = *cursor++;
+        }
+        const bool relative = command >= L'a' && command <= L'z';
+        switch (towupper(command)) {
+        case L'M': {
+            double px = 0;
+            double py = 0;
+            if (!ReadSvgNumber(cursor, px) || !ReadSvgNumber(cursor, py)) {
+                cursor += wcslen(cursor);
+                break;
+            }
+            if (relative && havePoint) {
+                px += cx;
+                py += cy;
+            }
+            cx = sx = px;
+            cy = sy = py;
+            havePoint = true;
+            command = relative ? L'l' : L'L';
+            break;
+        }
+        case L'L': {
+            double px = 0;
+            double py = 0;
+            while (ReadSvgNumber(cursor, px)) {
+                if (!ReadSvgNumber(cursor, py)) {
+                    return;
+                }
+                if (relative) {
+                    px += cx;
+                    py += cy;
+                }
+                path.AddLine(point(cx, cy), point(px, py));
+                cx = px;
+                cy = py;
+            }
+            break;
+        }
+        case L'H': {
+            double px = 0;
+            while (ReadSvgNumber(cursor, px)) {
+                if (relative) {
+                    px += cx;
+                }
+                path.AddLine(point(cx, cy), point(px, cy));
+                cx = px;
+            }
+            break;
+        }
+        case L'V': {
+            double py = 0;
+            while (ReadSvgNumber(cursor, py)) {
+                if (relative) {
+                    py += cy;
+                }
+                path.AddLine(point(cx, cy), point(cx, py));
+                cy = py;
+            }
+            break;
+        }
+        case L'C': {
+            double x1 = 0, y1 = 0, x2 = 0, y2 = 0, x3 = 0, y3 = 0;
+            while (ReadSvgNumber(cursor, x1)) {
+                if (!ReadSvgNumber(cursor, y1) || !ReadSvgNumber(cursor, x2) || !ReadSvgNumber(cursor, y2)
+                    || !ReadSvgNumber(cursor, x3) || !ReadSvgNumber(cursor, y3)) {
+                    return;
+                }
+                if (relative) {
+                    x1 += cx; y1 += cy; x2 += cx; y2 += cy; x3 += cx; y3 += cy;
+                }
+                path.AddBezier(point(cx, cy), point(x1, y1), point(x2, y2), point(x3, y3));
+                cx = x3;
+                cy = y3;
+            }
+            break;
+        }
+        case L'Z':
+            path.CloseFigure();
+            cx = sx;
+            cy = sy;
+            command = 0;
+            break;
+        default:
+            ++cursor;
+            break;
+        }
+    }
+
+    SolidBrush brush(color);
+    g.FillPath(&brush, &path);
+}
+
 void DrawChevronDown(Graphics& g, double cx, double cy, const Color& color)
 {
-    PointF pts[] = {
-        PointF(static_cast<REAL>(Px(cx - 4)), static_cast<REAL>(Px(cy - 2))),
-        PointF(static_cast<REAL>(Px(cx + 4)), static_cast<REAL>(Px(cy - 2))),
-        PointF(static_cast<REAL>(Px(cx)), static_cast<REAL>(Px(cy + 3))),
-    };
-    SolidBrush brush(color);
-    g.FillPolygon(&brush, pts, 3);
+    DrawFluentIcon(g, RectDip(cx - 8, cy - 8, 16, 16), FluentIcon::ChevronDown, color);
 }
 
 void DrawCheck(Graphics& g, double x, double y, const Color& color)
 {
-    DrawLine(g, x, y + 5, x + 4, y + 9, color, 1.7f);
-    DrawLine(g, x + 4, y + 9, x + 11, y, color, 1.7f);
+    DrawFluentIcon(g, RectDip(x - 2, y - 3, 16, 16), FluentIcon::Checkmark, color);
 }
 
 void DrawAppIcon(Graphics& g, double x, double y, double size, const Theme&)
@@ -1181,48 +1380,18 @@ void DrawAppIcon(Graphics& g, double x, double y, double size, const Theme&)
 
 void DrawFolderIcon(Graphics& g, double x, double y)
 {
-    GraphicsPath path;
-    path.AddLine(static_cast<REAL>(Px(x + 1)), static_cast<REAL>(Px(y + 5)), static_cast<REAL>(Px(x + 6)), static_cast<REAL>(Px(y + 5)));
-    path.AddLine(static_cast<REAL>(Px(x + 8)), static_cast<REAL>(Px(y + 7)), static_cast<REAL>(Px(x + 17)), static_cast<REAL>(Px(y + 7)));
-    path.AddLine(static_cast<REAL>(Px(x + 20)), static_cast<REAL>(Px(y + 10)), static_cast<REAL>(Px(x + 20)), static_cast<REAL>(Px(y + 17)));
-    path.AddLine(static_cast<REAL>(Px(x + 1)), static_cast<REAL>(Px(y + 17)), static_cast<REAL>(Px(x + 1)), static_cast<REAL>(Px(y + 5)));
-    path.CloseFigure();
-    SolidBrush fill(Rgba(232, 178, 58));
-    Pen pen(Rgba(199, 144, 42), static_cast<REAL>(Px(1)));
-    g.FillPath(&fill, &path);
-    g.DrawPath(&pen, &path);
+    DrawFluentIcon(g, RectDip(x, y - 1, 20, 20), FluentIcon::Folder, Rgba(232, 178, 58));
 }
 
 void DrawGridIcon(Graphics& g, double x, double y, const Color& color)
 {
-    SolidBrush brush(color);
-    for (int row = 0; row < 2; ++row) {
-        for (int col = 0; col < 2; ++col) {
-            DrawRounded(g, RectDip(x + col * 10, y + row * 10, 7, 7), 1.4f, color);
-        }
-    }
+    DrawFluentIcon(g, RectDip(x - 1, y - 2, 20, 20), FluentIcon::Grid, color);
 }
 
 void DrawThemeIcon(Graphics& g, const RECT& rect, const Theme& t)
 {
-    const double x = Dip(rect.left) + 10;
-    const double y = Dip(rect.top) + 7;
-    if (EffectiveDark()) {
-        Pen pen(t.fg2, static_cast<REAL>(Px(1.6)));
-        g.DrawEllipse(&pen, RectFOf(RectDip(x + 3, y + 3, 7, 7)));
-        DrawLine(g, x + 6.5, y, x + 6.5, y + 2, t.fg2, 1.2f);
-        DrawLine(g, x + 6.5, y + 12, x + 6.5, y + 14, t.fg2, 1.2f);
-        DrawLine(g, x, y + 6.5, x + 2, y + 6.5, t.fg2, 1.2f);
-        DrawLine(g, x + 12, y + 6.5, x + 14, y + 6.5, t.fg2, 1.2f);
-    } else {
-        GraphicsPath moon;
-        moon.AddEllipse(RectFOf(RectDip(x + 1, y + 1, 12, 12)));
-        GraphicsPath cut;
-        cut.AddEllipse(RectFOf(RectDip(x + 6, y - 1, 12, 12)));
-        moon.AddPath(&cut, FALSE);
-        SolidBrush brush(t.fg2);
-        g.FillPath(&brush, &moon);
-    }
+    DrawFluentIcon(g, RectDip(Dip(rect.left) + 8, Dip(rect.top) + 5, 18, 18),
+        EffectiveDark() ? FluentIcon::WeatherSunny : FluentIcon::WeatherMoon, t.fg2);
 }
 
 void DrawButton(Graphics& g, const RECT& rect, const std::wstring& text, const Theme& t,
@@ -1345,35 +1514,12 @@ void DrawGithubIcon(Graphics& g, const RECT& rect, const Theme& t)
 
 void DrawInfoIcon(Graphics& g, const RECT& rect, const Theme& t)
 {
-    const double size = 16;
-    const double left = Dip(rect.left) + (Dip(rect.right - rect.left) - size) / 2;
-    const double top = Dip(rect.top) + (Dip(rect.bottom - rect.top) - size) / 2;
-    Pen pen(t.fg2, static_cast<REAL>(Px(1.4)));
-    g.DrawEllipse(&pen, RectFOf(RectDip(left, top, size, size)));
-    DrawTextBlock(g, L"i", RectDip(left, top - 0.5, size, size), 10.5f, t.fg2,
-        FontStyleBold, StringAlignmentCenter, StringAlignmentCenter);
+    DrawFluentIcon(g, rect, FluentIcon::Info, t.fg2);
 }
 
 void DrawShieldIcon(Graphics& g, const RECT& rect, const Theme& t)
 {
-    const double size = 16;
-    const double left = Dip(rect.left) + (Dip(rect.right - rect.left) - size) / 2;
-    const double top = Dip(rect.top) + (Dip(rect.bottom - rect.top) - size) / 2;
-
-    GraphicsPath shield;
-    shield.AddLine(static_cast<REAL>(Px(left + 8)), static_cast<REAL>(Px(top + 1.5)),
-        static_cast<REAL>(Px(left + 13)), static_cast<REAL>(Px(top + 3.4)));
-    shield.AddLine(static_cast<REAL>(Px(left + 13)), static_cast<REAL>(Px(top + 7.1)),
-        static_cast<REAL>(Px(left + 11.2)), static_cast<REAL>(Px(top + 11.5)));
-    shield.AddLine(static_cast<REAL>(Px(left + 8)), static_cast<REAL>(Px(top + 14.2)),
-        static_cast<REAL>(Px(left + 4.8)), static_cast<REAL>(Px(top + 11.5)));
-    shield.AddLine(static_cast<REAL>(Px(left + 3)), static_cast<REAL>(Px(top + 7.1)),
-        static_cast<REAL>(Px(left + 3)), static_cast<REAL>(Px(top + 3.4)));
-    shield.CloseFigure();
-
-    Pen pen(t.fg, static_cast<REAL>(Px(1.25)));
-    pen.SetLineJoin(LineJoinRound);
-    g.DrawPath(&pen, &shield);
+    DrawFluentIcon(g, rect, FluentIcon::Shield, t.fg);
 }
 
 void DrawAboutActionButton(Graphics& g, const RECT& rect, const std::wstring& text, const Theme& t, Hit hit, AboutActionIcon iconKind)
@@ -1696,8 +1842,7 @@ void DrawExplorerPreview(Graphics& g, const RECT& frame, const Theme& t)
 
     DrawFolderIcon(g, x + 12, y + 14);
     DrawTextBlock(g, L"Pictures", RectDip(x + 37, y + 13, 70, 18), 13, t.fg2);
-    DrawLine(g, x + 112, y + 17, x + 116, y + 22, t.fg2, 1.2f);
-    DrawLine(g, x + 116, y + 22, x + 112, y + 27, t.fg2, 1.2f);
+    DrawFluentIcon(g, RectDip(x + 108, y + 14, 16, 16), FluentIcon::ChevronRight, t.fg2);
     DrawTextBlock(g, L"Transparent assets", RectDip(x + 124, y + 13, 160, 18), 13, t.fg);
 
     DrawRoundedBorder(g, g_layout.viewButton, 5, g_state.viewMenuOpen ? t.rowHover : t.ctrl, t.ctrlBorder);
@@ -1809,10 +1954,9 @@ void DrawTitlebar(Graphics& g, const RECT& client, const Theme& t)
     drawCap(g_layout.close, Hit::Close);
 
     const Color cap = g_hover == Hit::Close ? Rgba(255, 255, 255) : t.fg2;
-    DrawLine(g, Dip(g_layout.minimize.left) + 17, 20, Dip(g_layout.minimize.left) + 29, 20, t.fg2);
-    DrawRectLine(g, RectDip(Dip(g_layout.maximize.left) + 18, 15, 10, 10), t.fg2);
-    DrawLine(g, Dip(g_layout.close.left) + 18, 15, Dip(g_layout.close.left) + 28, 25, cap);
-    DrawLine(g, Dip(g_layout.close.left) + 28, 15, Dip(g_layout.close.left) + 18, 25, cap);
+    DrawFluentIcon(g, RectDip(Dip(g_layout.minimize.left) + 14, 10, 20, 20), FluentIcon::Subtract, t.fg2);
+    DrawFluentIcon(g, RectDip(Dip(g_layout.maximize.left) + 14, 10, 20, 20), FluentIcon::Maximize, t.fg2);
+    DrawFluentIcon(g, RectDip(Dip(g_layout.close.left) + 14, 10, 20, 20), FluentIcon::Dismiss, cap);
 }
 
 void DrawLeftPane(Graphics& g, const Theme& t)
@@ -1861,9 +2005,8 @@ void DrawLeftPane(Graphics& g, const Theme& t)
         SolidBrush line(t.ctrlBorder);
         g.FillRectangle(&line, RectFOf(RectDip(Dip(g_layout.sizeDown.left), Dip(g_layout.sizeDown.top), 1, 30)));
         g.FillRectangle(&line, RectFOf(RectDip(Dip(g_layout.sizeUp.left), Dip(g_layout.sizeUp.top), 1, 30)));
-        DrawLine(g, Dip(g_layout.sizeDown.left) + 10, Dip(g_layout.sizeDown.top) + 15, Dip(g_layout.sizeDown.left) + 20, Dip(g_layout.sizeDown.top) + 15, t.fg, 1.4f);
-        DrawLine(g, Dip(g_layout.sizeUp.left) + 10, Dip(g_layout.sizeUp.top) + 15, Dip(g_layout.sizeUp.left) + 20, Dip(g_layout.sizeUp.top) + 15, t.fg, 1.4f);
-        DrawLine(g, Dip(g_layout.sizeUp.left) + 15, Dip(g_layout.sizeUp.top) + 10, Dip(g_layout.sizeUp.left) + 15, Dip(g_layout.sizeUp.top) + 20, t.fg, 1.4f);
+        DrawFluentIcon(g, RectDip(Dip(g_layout.sizeDown.left) + 5, Dip(g_layout.sizeDown.top) + 5, 20, 20), FluentIcon::Subtract, t.fg);
+        DrawFluentIcon(g, RectDip(Dip(g_layout.sizeUp.left) + 5, Dip(g_layout.sizeUp.top) + 5, 20, 20), FluentIcon::Add, t.fg);
         DrawTextBlock(g, L"px", RectDip(Dip(g_layout.sizeBox.right) + 12, Dip(g_layout.sizeBox.top) + 6, 24, 18), 12.5f, t.fg2);
     }
 
@@ -1983,8 +2126,7 @@ void DrawAboutDialog(Graphics& g, const RECT& client, const Theme& t)
         DrawRounded(g, g_layout.aboutClose, 4, EffectiveDark() ? Rgba(255, 255, 255, 18) : Rgba(0, 0, 0, 8));
     }
     const Color closeColor = g_hover == Hit::AboutClose ? t.fg : t.fg2;
-    DrawLine(g, x + 263, y + 20, x + 271, y + 28, closeColor, 1.2f);
-    DrawLine(g, x + 271, y + 20, x + 263, y + 28, closeColor, 1.2f);
+    DrawFluentIcon(g, RectDip(x + 257, y + 14, 22, 22), FluentIcon::Dismiss, closeColor);
 
     DrawAppIcon(g, x + 122, y + 30, 56, t);
     DrawTextBlock(g, L"Backdropper", RectDip(x + 22, y + 100, 256, 22), 16, t.fg,
@@ -2084,21 +2226,8 @@ void DrawPrivacyScrollbar(Graphics& g, const Theme& t)
     const double thumbY = top + (height - thumbHeight) * std::min(maxScroll, g_state.privacyScroll) / maxScroll;
     const Color scrollColor = EffectiveDark() ? Rgba(255, 255, 255, 115) : Rgba(0, 0, 0, 95);
 
-    GraphicsPath up;
-    up.AddLine(static_cast<REAL>(Px(x + 5)), static_cast<REAL>(Px(top - 18)),
-        static_cast<REAL>(Px(x + 10)), static_cast<REAL>(Px(top - 25)));
-    up.AddLine(static_cast<REAL>(Px(x + 10)), static_cast<REAL>(Px(top - 25)),
-        static_cast<REAL>(Px(x + 15)), static_cast<REAL>(Px(top - 18)));
-    up.CloseFigure();
-    GraphicsPath down;
-    down.AddLine(static_cast<REAL>(Px(x + 5)), static_cast<REAL>(Px(top + height + 18)),
-        static_cast<REAL>(Px(x + 10)), static_cast<REAL>(Px(top + height + 25)));
-    down.AddLine(static_cast<REAL>(Px(x + 10)), static_cast<REAL>(Px(top + height + 25)),
-        static_cast<REAL>(Px(x + 15)), static_cast<REAL>(Px(top + height + 18)));
-    down.CloseFigure();
-    SolidBrush brush(scrollColor);
-    g.FillPath(&brush, &up);
-    g.FillPath(&brush, &down);
+    DrawFluentIcon(g, RectDip(x + 2, top - 29, 16, 16), FluentIcon::ChevronUp, scrollColor);
+    DrawFluentIcon(g, RectDip(x + 2, top + height + 13, 16, 16), FluentIcon::ChevronDown, scrollColor);
     DrawRounded(g, RectDip(x + 3, thumbY, 14, thumbHeight), 7, scrollColor);
 }
 
@@ -2130,8 +2259,7 @@ void DrawPrivacyDialog(Graphics& g, const RECT& client, const Theme& t)
         DrawRounded(g, g_layout.privacyClose, 4, EffectiveDark() ? Rgba(255, 255, 255, 18) : Rgba(0, 0, 0, 8));
     }
     const Color closeColor = g_hover == Hit::PrivacyClose ? t.fg : t.fg2;
-    DrawLine(g, x + w - 56, y + 45, x + w - 45, y + 56, closeColor, 1.2f);
-    DrawLine(g, x + w - 45, y + 45, x + w - 56, y + 56, closeColor, 1.2f);
+    DrawFluentIcon(g, RectDip(x + w - 62, y + 38, 24, 24), FluentIcon::Dismiss, closeColor);
 
     SolidBrush stroke(t.stroke);
     g.FillRectangle(&stroke, RectFOf(RectDip(x, y + 106, w, 1)));
@@ -2166,8 +2294,7 @@ void DrawFormatsDialog(Graphics& g, const RECT& client, const Theme& t)
         DrawRounded(g, g_layout.formatsClose, 4, EffectiveDark() ? Rgba(255, 255, 255, 18) : Rgba(0, 0, 0, 8));
     }
     const Color closeColor = g_hover == Hit::FormatClose ? t.fg : t.fg2;
-    DrawLine(g, x + w - 37, y + 23, x + w - 28, y + 32, closeColor, 1.2f);
-    DrawLine(g, x + w - 28, y + 23, x + w - 37, y + 32, closeColor, 1.2f);
+    DrawFluentIcon(g, RectDip(x + w - 43, y + 17, 22, 22), FluentIcon::Dismiss, closeColor);
 
     for (size_t i = 0; i < kBackdropperFormatCount; ++i) {
         const RECT row = g_layout.formatToggles[i];

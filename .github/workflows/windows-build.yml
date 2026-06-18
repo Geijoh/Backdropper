@@ -81,7 +81,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force dist\Backdropper | Out-Null
-          Copy-Item -Path build\bin\BackdropperSettings.exe, build\bin\BackdropperThumb.dll, build\bin\BackdropperUpdater.exe, README.md, LICENSE, PRIVACY.md -Destination dist\Backdropper
+          Copy-Item -Path build\bin\BackdropperSettings.exe, build\bin\BackdropperThumb.dll, build\bin\BackdropperUpdater.exe, README.md, LICENSE, PRIVACY.md, THIRD_PARTY_NOTICES.md -Destination dist\Backdropper
           Compress-Archive -Path dist\Backdropper\* -DestinationPath "dist\Backdropper-${{ steps.version.outputs.version }}-windows-x64.zip" -Force
           Set-Content -Path dist\backdropper-version.txt -Value "${{ steps.version.outputs.version }}" -NoNewline
 

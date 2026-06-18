@@ -59,6 +59,9 @@ add_custom_command(TARGET BackdropperSettings POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
     "${CMAKE_CURRENT_SOURCE_DIR}/PRIVACY.md"
     "$<TARGET_FILE_DIR:BackdropperSettings>/PRIVACY.md"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    "${CMAKE_CURRENT_SOURCE_DIR}/THIRD_PARTY_NOTICES.md"
+    "$<TARGET_FILE_DIR:BackdropperSettings>/THIRD_PARTY_NOTICES.md"
 )
 
 add_executable(RenderSmoke
