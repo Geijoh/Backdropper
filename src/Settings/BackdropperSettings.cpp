@@ -38,6 +38,7 @@ constexpr std::array<const wchar_t*, 12> kExtensions = {
 constexpr wchar_t kBackdropperVersion[] = WIDEN_TEXT(BACKDROPPER_VERSION);
 constexpr wchar_t kGithubUrl[] = L"https://github.com/Geijoh/Backdropper";
 constexpr wchar_t kPrivacyUrl[] = L"https://github.com/Geijoh/Backdropper/blob/main/PRIVACY.md";
+constexpr wchar_t kUpdaterScriptName[] = L"update-backdropper.ps1";
 
 enum class Hit {
     None,
@@ -58,6 +59,7 @@ enum class Hit {
     ViewButton,
     About,
     AboutClose,
+    AboutUpdate,
     AboutGithub,
     AboutPrivacy,
     Register,
@@ -81,6 +83,12 @@ enum class ViewMode {
     List,
     Details,
     Tiles,
+};
+
+enum class AboutActionIcon {
+    Update,
+    Github,
+    Privacy,
 };
 
 struct Theme {
@@ -134,6 +142,7 @@ struct Layout {
     RECT aboutBtn {};
     RECT aboutDialog {};
     RECT aboutClose {};
+    RECT aboutUpdate {};
     RECT aboutGithub {};
     RECT aboutPrivacy {};
     RECT registerBtn {};
@@ -180,6 +189,7 @@ Hit g_hover = Hit::None;
 bool g_trackingMouse = false;
 
 void LayoutChildWindows(HWND window);
+void OpenDialog(HWND window, const std::wstring& title, const std::wstring& body);
 
 int Px(double dip)
 {
@@ -330,6 +340,61 @@ std::wstring DllPath()
     PathRemoveFileSpecW(path);
     PathAppendW(path, L"BackdropperThumb.dll");
     return path;
+}
+
+std::wstring AppDirectory()
+{
+    wchar_t path[MAX_PATH] = {};
+    GetModuleFileNameW(nullptr, path, ARRAYSIZE(path));
+    PathRemoveFileSpecW(path);
+    return path;
+}
+
+std::wstring UpdaterScriptPath()
+{
+    wchar_t path[MAX_PATH] = {};
+    wcscpy_s(path, AppDirectory().c_str());
+    PathAppendW(path, kUpdaterScriptName);
+    return path;
+}
+
+std::wstring QuoteArg(const std::wstring& value)
+{
+    return std::wstring(L"\"") + value + L"\"";
+}
+
+bool LaunchUpdater(HWND owner)
+{
+    const std::wstring script = UpdaterScriptPath();
+    if (GetFileAttributesW(script.c_str()) == INVALID_FILE_ATTRIBUTES) {
+        g_state.aboutOpen = false;
+        OpenDialog(owner, L"Updater not found",
+            L"The updater script was not found next to BackdropperSettings.exe. Download the latest build from GitHub Releases.");
+        return false;
+    }
+
+    const std::wstring args =
+        std::wstring(L"-NoProfile -ExecutionPolicy Bypass -File ") + QuoteArg(script)
+        + L" -InstallDir " + QuoteArg(AppDirectory())
+        + L" -CurrentPid " + std::to_wstring(GetCurrentProcessId())
+        + L" -CurrentVersion " + QuoteArg(kBackdropperVersion);
+
+    SHELLEXECUTEINFOW info = {};
+    info.cbSize = sizeof(info);
+    info.hwnd = owner;
+    info.lpVerb = L"open";
+    info.lpFile = L"powershell.exe";
+    info.lpParameters = args.c_str();
+    info.nShow = SW_SHOWNORMAL;
+
+    if (!ShellExecuteExW(&info)) {
+        g_state.aboutOpen = false;
+        OpenDialog(owner, L"Update failed",
+            L"Backdropper could not start PowerShell to run the updater.");
+        return false;
+    }
+
+    return true;
 }
 
 bool RunRegsvr(HWND owner, bool unregister)
@@ -594,8 +659,9 @@ void CalculateLayout(HWND window)
     const double aboutDialogY = (h - aboutDialogH) / 2;
     g_layout.aboutDialog = RectDip(aboutDialogX, aboutDialogY, aboutDialogW, aboutDialogH);
     g_layout.aboutClose = RectDip(aboutDialogX + 348, aboutDialogY + 18, 28, 28);
-    g_layout.aboutGithub = RectDip(aboutDialogX + 28, aboutDialogY + 315, 163, 34);
-    g_layout.aboutPrivacy = RectDip(aboutDialogX + 210, aboutDialogY + 315, 166, 34);
+    g_layout.aboutUpdate = RectDip(aboutDialogX + 28, aboutDialogY + 315, 96, 34);
+    g_layout.aboutGithub = RectDip(aboutDialogX + 134, aboutDialogY + 315, 96, 34);
+    g_layout.aboutPrivacy = RectDip(aboutDialogX + 240, aboutDialogY + 315, 136, 34);
 }
 
 void MoveEdit(HWND edit, const RECT& outer)
@@ -959,19 +1025,42 @@ void DrawShieldIcon(Graphics& g, const RECT& rect, const Theme& t)
     g.DrawPath(&pen, &shield);
 }
 
-void DrawAboutActionButton(Graphics& g, const RECT& rect, const std::wstring& text, const Theme& t, Hit hit, bool github)
+void DrawDownloadIcon(Graphics& g, const RECT& rect, const Theme& t)
+{
+    const double size = 16;
+    const double left = Dip(rect.left) + (Dip(rect.right - rect.left) - size) / 2;
+    const double top = Dip(rect.top) + (Dip(rect.bottom - rect.top) - size) / 2;
+
+    Pen pen(t.fg, static_cast<REAL>(Px(1.35)));
+    pen.SetStartCap(LineCapRound);
+    pen.SetEndCap(LineCapRound);
+    g.DrawLine(&pen, PointF(static_cast<REAL>(Px(left + 8)), static_cast<REAL>(Px(top + 2))),
+        PointF(static_cast<REAL>(Px(left + 8)), static_cast<REAL>(Px(top + 10))));
+    g.DrawLine(&pen, PointF(static_cast<REAL>(Px(left + 4.5)), static_cast<REAL>(Px(top + 6.8))),
+        PointF(static_cast<REAL>(Px(left + 8)), static_cast<REAL>(Px(top + 10.3))));
+    g.DrawLine(&pen, PointF(static_cast<REAL>(Px(left + 11.5)), static_cast<REAL>(Px(top + 6.8))),
+        PointF(static_cast<REAL>(Px(left + 8)), static_cast<REAL>(Px(top + 10.3))));
+    g.DrawLine(&pen, PointF(static_cast<REAL>(Px(left + 3.5)), static_cast<REAL>(Px(top + 13.5))),
+        PointF(static_cast<REAL>(Px(left + 12.5)), static_cast<REAL>(Px(top + 13.5))));
+}
+
+void DrawAboutActionButton(Graphics& g, const RECT& rect, const std::wstring& text, const Theme& t, Hit hit, AboutActionIcon iconKind)
 {
     const bool hovered = g_hover == hit;
     DrawRoundedBorder(g, rect, 5,
         hovered ? (EffectiveDark() ? Rgba(255, 255, 255, 20) : Rgba(0, 0, 0, 10)) : t.ctrl,
         t.ctrlBorder);
 
-    const double groupW = github ? 88 : 112;
+    const double groupW =
+        iconKind == AboutActionIcon::Privacy ? 112 :
+        iconKind == AboutActionIcon::Github ? 88 : 82;
     const double iconSize = 18;
     const double x = Dip(rect.left) + (Dip(rect.right - rect.left) - groupW) / 2;
     const double y = Dip(rect.top) + (Dip(rect.bottom - rect.top) - iconSize) / 2;
     const RECT icon = RectDip(x, y, iconSize, iconSize);
-    if (github) {
+    if (iconKind == AboutActionIcon::Update) {
+        DrawDownloadIcon(g, icon, t);
+    } else if (iconKind == AboutActionIcon::Github) {
         DrawGithubIcon(g, icon, t);
     } else {
         DrawShieldIcon(g, icon, t);
@@ -1560,8 +1649,9 @@ void DrawAboutDialog(Graphics& g, const RECT& client, const Theme& t)
         RectDip(x + 64, y + 264, 266, 20), 12.5f, t.fg2,
         FontStyleRegular, StringAlignmentCenter, StringAlignmentCenter);
 
-    DrawAboutActionButton(g, g_layout.aboutGithub, L"GitHub", t, Hit::AboutGithub, true);
-    DrawAboutActionButton(g, g_layout.aboutPrivacy, L"Privacy Policy", t, Hit::AboutPrivacy, false);
+    DrawAboutActionButton(g, g_layout.aboutUpdate, L"Update", t, Hit::AboutUpdate, AboutActionIcon::Update);
+    DrawAboutActionButton(g, g_layout.aboutGithub, L"GitHub", t, Hit::AboutGithub, AboutActionIcon::Github);
+    DrawAboutActionButton(g, g_layout.aboutPrivacy, L"Privacy Policy", t, Hit::AboutPrivacy, AboutActionIcon::Privacy);
 }
 
 void Paint(HWND window, HDC hdc)
@@ -1601,6 +1691,7 @@ Hit HitTest(POINT pt)
 {
     if (AboutOpen()) {
         if (PtIn(g_layout.aboutClose, pt)) return Hit::AboutClose;
+        if (PtIn(g_layout.aboutUpdate, pt)) return Hit::AboutUpdate;
         if (PtIn(g_layout.aboutGithub, pt)) return Hit::AboutGithub;
         if (PtIn(g_layout.aboutPrivacy, pt)) return Hit::AboutPrivacy;
         return Hit::None;
@@ -1750,6 +1841,11 @@ void ActivateHit(HWND window, Hit hit)
         switch (hit) {
         case Hit::AboutClose:
             CloseAbout(window);
+            break;
+        case Hit::AboutUpdate:
+            if (LaunchUpdater(window)) {
+                DestroyWindow(window);
+            }
             break;
         case Hit::AboutGithub:
             ShellExecuteW(window, L"open", kGithubUrl, nullptr, nullptr, SW_SHOWNORMAL);
