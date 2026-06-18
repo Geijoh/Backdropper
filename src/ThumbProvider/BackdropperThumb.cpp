@@ -1,3 +1,4 @@
+#include "format_support.h"
 #include "render.h"
 #include "settings.h"
 #include "thumbnail_cache.h"
@@ -6,10 +7,8 @@
 #include <shlwapi.h>
 #include <strsafe.h>
 #include <thumbcache.h>
-#include <wincodec.h>
 #include <wrl/client.h>
 
-#include <cwctype>
 #include <string>
 
 using Microsoft::WRL::ComPtr;
@@ -114,133 +113,11 @@ void WriteBackupDword(HKEY key, const wchar_t* name, DWORD value)
     RegSetValueExW(key, name, 0, REG_DWORD, reinterpret_cast<const BYTE*>(&value), sizeof(value));
 }
 
-std::wstring Lower(std::wstring value)
-{
-    for (wchar_t& ch : value) {
-        ch = static_cast<wchar_t>(std::towlower(ch));
-    }
-    return value;
-}
-
-bool ExtensionListContains(const std::wstring& extensions, const wchar_t* extension)
-{
-    const std::wstring wanted = Lower(extension);
-    std::wstring token;
-    for (const wchar_t ch : extensions + L",") {
-        if (ch == L',' || ch == L';' || iswspace(ch)) {
-            if (Lower(token) == wanted) {
-                return true;
-            }
-            token.clear();
-        } else {
-            token.push_back(ch);
-        }
-    }
-    return false;
-}
-
-bool WicSupportsExtension(const wchar_t* extension)
-{
-    const HRESULT init = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
-    const bool uninitialize = init == S_OK || init == S_FALSE;
-    if (FAILED(init) && init != RPC_E_CHANGED_MODE) {
-        return wcscmp(extension, L".png") == 0;
-    }
-
-    ComPtr<IWICImagingFactory> factory;
-    HRESULT hr = CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&factory));
-    if (FAILED(hr)) {
-        if (uninitialize) {
-            CoUninitialize();
-        }
-        return wcscmp(extension, L".png") == 0;
-    }
-
-    ComPtr<IEnumUnknown> decoders;
-    hr = factory->CreateComponentEnumerator(WICDecoder, WICComponentEnumerateDefault, &decoders);
-    bool supported = false;
-    if (SUCCEEDED(hr)) {
-        ComPtr<IUnknown> unknown;
-        while (!supported && decoders->Next(1, &unknown, nullptr) == S_OK) {
-            ComPtr<IWICBitmapCodecInfo> info;
-            if (SUCCEEDED(unknown.As(&info))) {
-                UINT length = 0;
-                if (SUCCEEDED(info->GetFileExtensions(0, nullptr, &length)) && length > 0) {
-                    std::wstring list(length, L'\0');
-                    if (SUCCEEDED(info->GetFileExtensions(length, list.data(), &length))) {
-                        supported = ExtensionListContains(list, extension);
-                    }
-                }
-            }
-            unknown.Reset();
-        }
-    }
-
-    if (uninitialize) {
-        CoUninitialize();
-    }
-    return supported;
-}
-
-bool HasBuiltInFallbackRenderer(const wchar_t* extension)
-{
-    return wcscmp(extension, L".svg") == 0 || wcscmp(extension, L".pdf") == 0
-        || wcscmp(extension, L".ai") == 0 || wcscmp(extension, L".psd") == 0
-        || wcscmp(extension, L".tga") == 0;
-}
-
-bool HasGhostscript()
-{
-    wchar_t path[MAX_PATH] = {};
-    if (SearchPathW(nullptr, L"gswin64c.exe", nullptr, ARRAYSIZE(path), path, nullptr)
-        || SearchPathW(nullptr, L"gswin32c.exe", nullptr, ARRAYSIZE(path), path, nullptr)) {
-        return true;
-    }
-
-    auto findUnder = [](const wchar_t* base, const wchar_t* exe) {
-        std::wstring pattern = std::wstring(base) + L"\\gs*";
-        WIN32_FIND_DATAW data = {};
-        HANDLE find = FindFirstFileW(pattern.c_str(), &data);
-        while (find != INVALID_HANDLE_VALUE) {
-            if ((data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && wcscmp(data.cFileName, L".") != 0 && wcscmp(data.cFileName, L"..") != 0) {
-                std::wstring candidate = std::wstring(base) + L"\\" + data.cFileName + L"\\bin\\" + exe;
-                if (GetFileAttributesW(candidate.c_str()) != INVALID_FILE_ATTRIBUTES) {
-                    FindClose(find);
-                    return true;
-                }
-            }
-            if (!FindNextFileW(find, &data)) {
-                break;
-            }
-        }
-        if (find != INVALID_HANDLE_VALUE) {
-            FindClose(find);
-        }
-        return false;
-    };
-
-    return findUnder(L"C:\\Program Files\\gs", L"gswin64c.exe")
-        || findUnder(L"C:\\Program Files (x86)\\gs", L"gswin32c.exe");
-}
-
 std::wstring EffectiveProgIdForExtension(const wchar_t* extension)
 {
     std::wstring progId;
     ReadStringValue(HKEY_CLASSES_ROOT, extension, nullptr, &progId);
     return progId;
-}
-
-bool CanRegisterExtension(const wchar_t* extension)
-{
-    if (wcscmp(extension, L".png") == 0) {
-        // ponytail: PNG is the primary feature; register it even if WIC enumeration is incomplete.
-        return true;
-    }
-    if (wcscmp(extension, L".eps") == 0) {
-        // ponytail: Ghostscript is optional; don't steal EPS thumbnails when it is not installed.
-        return HasGhostscript();
-    }
-    return WicSupportsExtension(extension) || HasBuiltInFallbackRenderer(extension);
 }
 
 bool BackupExists(const wchar_t* extension)
@@ -346,7 +223,7 @@ HRESULT RegisterServer()
     const BackdropperSettings settings = LoadBackdropperSettings();
     for (size_t i = 0; i < kBackdropperFormats.size(); ++i) {
         const wchar_t* extension = kBackdropperFormats[i];
-        if (!settings.enabledFormats[i] || !CanRegisterExtension(extension)) {
+        if (!settings.enabledFormats[i] || !CanRegisterBackdropperFormat(extension)) {
             if (BackupExists(extension)) {
                 RestorePreviousHandler(extension);
             }

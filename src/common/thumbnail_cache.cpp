@@ -7,9 +7,7 @@
 
 #include <string>
 
-namespace {
-
-bool WaitForShellWindow(bool present, DWORD timeoutMs)
+static bool WaitForShellWindow(bool present, DWORD timeoutMs)
 {
     const DWORD start = GetTickCount();
     do {
@@ -22,7 +20,7 @@ bool WaitForShellWindow(bool present, DWORD timeoutMs)
     return false;
 }
 
-bool StartExplorerShell()
+bool StartBackdropperExplorerShell()
 {
     wchar_t windowsDir[MAX_PATH] = {};
     if (!GetWindowsDirectoryW(windowsDir, ARRAYSIZE(windowsDir))) {
@@ -39,7 +37,7 @@ bool StartExplorerShell()
     return false;
 }
 
-bool StopShellExplorer()
+bool StopBackdropperExplorerShell()
 {
     HWND shell = FindWindowW(L"Shell_TrayWnd", nullptr);
     if (!shell) {
@@ -66,7 +64,7 @@ bool StopShellExplorer()
     return stopped;
 }
 
-int DeleteThumbcacheDbs()
+static int DeleteThumbcacheDbs()
 {
     PWSTR localAppData = nullptr;
     if (FAILED(SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, nullptr, &localAppData))) {
@@ -98,11 +96,9 @@ int DeleteThumbcacheDbs()
     return failures;
 }
 
-}
-
 std::wstring ForceDeleteThumbcacheDbs()
 {
-    const bool stopped = StopShellExplorer();
+    const bool stopped = StopBackdropperExplorerShell();
     if (stopped) {
         WaitForShellWindow(false, 5000);
     }
@@ -110,12 +106,12 @@ std::wstring ForceDeleteThumbcacheDbs()
     int failures = DeleteThumbcacheDbs();
     if (failures < 0) {
         if (stopped) {
-            StartExplorerShell();
+            StartBackdropperExplorerShell();
         }
         return L"Could not find the thumbnail cache folder.";
     }
 
-    const bool restarted = stopped ? StartExplorerShell() : FindWindowW(L"Shell_TrayWnd", nullptr) != nullptr;
+    const bool restarted = stopped ? StartBackdropperExplorerShell() : FindWindowW(L"Shell_TrayWnd", nullptr) != nullptr;
     SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, nullptr, nullptr);
 
     if (!stopped) {

@@ -1,8 +1,10 @@
+#include "thumbnail_cache.h"
+#include "version.h"
+
 #include <windows.h>
 #include <shellapi.h>
 #include <urlmon.h>
 
-#include <array>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -26,43 +28,9 @@ void WriteStep(const std::wstring& message)
     std::wcout << L"[Backdropper] " << message << std::endl;
 }
 
-bool ParseVersion(const std::wstring& text, std::array<int, 3>& parts)
-{
-    return swscanf_s(text.c_str(), L"%d.%d.%d", &parts[0], &parts[1], &parts[2]) == 3;
-}
-
-int CompareVersions(const std::wstring& left, const std::wstring& right)
-{
-    std::array<int, 3> a {};
-    std::array<int, 3> b {};
-    if (!ParseVersion(left, a) || !ParseVersion(right, b)) {
-        return 0;
-    }
-    for (int i = 0; i < 3; ++i) {
-        if (a[i] != b[i]) {
-            return a[i] < b[i] ? -1 : 1;
-        }
-    }
-    return 0;
-}
-
 bool ShouldInstallUpdate(const std::wstring& latest, const std::wstring& current, bool force)
 {
     return force || CompareVersions(latest, current) > 0;
-}
-
-std::wstring TrimVersion(std::wstring text)
-{
-    if (!text.empty() && text[0] == L'v') {
-        text.erase(text.begin());
-    }
-    while (!text.empty() && iswspace(text.front())) {
-        text.erase(text.begin());
-    }
-    while (!text.empty() && iswspace(text.back())) {
-        text.pop_back();
-    }
-    return text;
 }
 
 std::wstring ZipAssetName(const std::wstring& version)
@@ -124,33 +92,12 @@ bool ExtractZip(const fs::path& zip, const fs::path& outDir)
     return RunAndWait(TarPath(), L"-xf " + Quote(zip.wstring()) + L" -C " + Quote(outDir.wstring()));
 }
 
-fs::path FindFile(const fs::path& root, const std::wstring& filename)
-{
-    for (const auto& entry : fs::recursive_directory_iterator(root)) {
-        if (entry.is_regular_file() && _wcsicmp(entry.path().filename().c_str(), filename.c_str()) == 0) {
-            return entry.path();
-        }
-    }
-    return {};
-}
-
-void CopyTreeItem(const fs::path& source, const fs::path& target)
-{
-    if (fs::is_directory(source)) {
-        fs::create_directories(target);
-        for (const auto& entry : fs::directory_iterator(source)) {
-            CopyTreeItem(entry.path(), target / entry.path().filename());
-        }
-    } else {
-        fs::create_directories(target.parent_path());
-        fs::copy_file(source, target, fs::copy_options::overwrite_existing);
-    }
-}
-
 void CopyPayload(const fs::path& payloadDir, const fs::path& installDir)
 {
+    fs::create_directories(installDir);
     for (const auto& entry : fs::directory_iterator(payloadDir)) {
-        CopyTreeItem(entry.path(), installDir / entry.path().filename());
+        fs::copy(entry.path(), installDir / entry.path().filename(),
+            fs::copy_options::recursive | fs::copy_options::overwrite_existing);
     }
 }
 
@@ -187,40 +134,6 @@ void StartBackdropper(const fs::path& installDir)
     }
 }
 
-bool StopShellExplorer()
-{
-    HWND shell = FindWindowW(L"Shell_TrayWnd", nullptr);
-    if (!shell) {
-        return true;
-    }
-
-    DWORD pid = 0;
-    GetWindowThreadProcessId(shell, &pid);
-    HANDLE process = pid ? OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE, FALSE, pid) : nullptr;
-    if (!process) {
-        return false;
-    }
-
-    // ponytail: shell process only; no process-tree kill.
-    const bool stopped = TerminateProcess(process, 0) != FALSE;
-    if (stopped) {
-        WaitForSingleObject(process, 5000);
-    }
-    CloseHandle(process);
-    return stopped;
-}
-
-void StartExplorerShell()
-{
-    wchar_t windowsDir[MAX_PATH] = {};
-    if (GetWindowsDirectoryW(windowsDir, ARRAYSIZE(windowsDir))) {
-        const fs::path explorer = fs::path(windowsDir) / L"explorer.exe";
-        ShellExecuteW(nullptr, L"open", explorer.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
-    } else {
-        ShellExecuteW(nullptr, L"open", L"explorer.exe", nullptr, nullptr, SW_SHOWNORMAL);
-    }
-}
-
 int SelfTest()
 {
     if (CompareVersions(L"1.2.3", L"1.2.2") <= 0) return 1;
@@ -231,6 +144,18 @@ int SelfTest()
     if (TrimVersion(L"v0.5.3\r\n") != L"0.5.3") return 1;
     if (ZipAssetName(L"0.5.8") != L"Backdropper-0.5.8-windows-x64.zip") return 1;
     if (!RunAndWait(TarPath(), L"--version")) return 1;
+
+    const fs::path copyRoot = TempPath(L"BackdropperUpdaterSelfTest-" + std::to_wstring(GetCurrentProcessId()));
+    fs::remove_all(copyRoot);
+    fs::create_directories(copyRoot / L"payload" / L"nested");
+    std::ofstream(copyRoot / L"payload" / L"file.txt") << "ok";
+    std::ofstream(copyRoot / L"payload" / L"nested" / L"file.txt") << "ok";
+    CopyPayload(copyRoot / L"payload", copyRoot / L"install");
+    const bool copied = fs::exists(copyRoot / L"install" / L"file.txt")
+        && fs::exists(copyRoot / L"install" / L"nested" / L"file.txt");
+    fs::remove_all(copyRoot);
+    if (!copied) return 1;
+
     std::wcout << L"OK" << std::endl;
     return 0;
 }
@@ -316,8 +241,8 @@ int wmain()
             throw std::runtime_error("Could not extract update ZIP.");
         }
 
-        const fs::path settingsExe = FindFile(extractDir, L"BackdropperSettings.exe");
-        if (settingsExe.empty()) {
+        const fs::path settingsExe = extractDir / L"BackdropperSettings.exe";
+        if (!fs::exists(settingsExe)) {
             throw std::runtime_error("The downloaded ZIP does not contain BackdropperSettings.exe.");
         }
         const fs::path payloadDir = settingsExe.parent_path();
@@ -330,13 +255,13 @@ int wmain()
             CopyPayload(payloadDir, installDir);
         } catch (...) {
             WriteStep(L"Files are still in use. Restarting Explorer and retrying...");
-            stoppedExplorer = StopShellExplorer();
+            stoppedExplorer = StopBackdropperExplorerShell();
             Sleep(2000);
             CopyPayload(payloadDir, installDir);
         }
 
         if (stoppedExplorer) {
-            StartExplorerShell();
+            StartBackdropperExplorerShell();
         }
 
         WriteStep(L"Update complete. Starting Backdropper...");
@@ -346,7 +271,7 @@ int wmain()
     } catch (const std::exception& ex) {
         std::cerr << "[Backdropper] Update failed: " << ex.what() << std::endl;
         if (stoppedExplorer) {
-            StartExplorerShell();
+            StartBackdropperExplorerShell();
         }
         if (!installDir.empty()) {
             StartBackdropper(installDir);

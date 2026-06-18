@@ -1,3 +1,4 @@
+#include "format_support.h"
 #include "render.h"
 
 #include <d2d1_3.h>
@@ -645,48 +646,6 @@ bool LooksSvg(const std::vector<BYTE>& bytes)
     return head.find("<svg") != std::string::npos;
 }
 
-std::wstring FindGhostscript()
-{
-    wchar_t path[MAX_PATH] = {};
-    if (SearchPathW(nullptr, L"gswin64c.exe", nullptr, ARRAYSIZE(path), path, nullptr)) {
-        return path;
-    }
-    if (SearchPathW(nullptr, L"gswin32c.exe", nullptr, ARRAYSIZE(path), path, nullptr)) {
-        return path;
-    }
-
-    auto findUnder = [](const wchar_t* base, const wchar_t* exe) -> std::wstring {
-        std::wstring pattern = std::wstring(base) + L"\\gs*";
-        WIN32_FIND_DATAW data = {};
-        HANDLE find = FindFirstFileW(pattern.c_str(), &data);
-        while (find != INVALID_HANDLE_VALUE) {
-            if ((data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && wcscmp(data.cFileName, L".") != 0 && wcscmp(data.cFileName, L"..") != 0) {
-                std::wstring candidate = std::wstring(base) + L"\\" + data.cFileName + L"\\bin\\" + exe;
-                if (GetFileAttributesW(candidate.c_str()) != INVALID_FILE_ATTRIBUTES) {
-                    FindClose(find);
-                    return candidate;
-                }
-            }
-            if (!FindNextFileW(find, &data)) {
-                break;
-            }
-        }
-        if (find != INVALID_HANDLE_VALUE) {
-            FindClose(find);
-        }
-        return {};
-    };
-
-    for (const auto& candidate : {
-        findUnder(L"C:\\Program Files\\gs", L"gswin64c.exe"),
-        findUnder(L"C:\\Program Files (x86)\\gs", L"gswin32c.exe") }) {
-        if (!candidate.empty()) {
-            return candidate;
-        }
-    }
-    return {};
-}
-
 std::wstring Quote(const std::wstring& value)
 {
     return L"\"" + value + L"\"";
@@ -728,7 +687,7 @@ HRESULT DecodePostScriptWithGhostscript(IWICImagingFactory* factory, const std::
         return E_FAIL;
     }
 
-    const std::wstring gs = FindGhostscript();
+    const std::wstring gs = FindGhostscriptExecutable();
     if (gs.empty()) {
         return E_FAIL;
     }

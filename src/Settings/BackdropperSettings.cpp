@@ -1,5 +1,7 @@
+#include "format_support.h"
 #include "settings.h"
 #include "thumbnail_cache.h"
+#include "version.h"
 #include "resource.h"
 
 #include <windows.h>
@@ -9,13 +11,10 @@
 #include <gdiplus.h>
 #include <shlwapi.h>
 #include <urlmon.h>
-#include <wincodec.h>
-#include <wrl/client.h>
 
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <cwctype>
 #include <fstream>
 #include <iterator>
 #include <sstream>
@@ -23,7 +22,6 @@
 #include <vector>
 
 using namespace Gdiplus;
-using Microsoft::WRL::ComPtr;
 
 namespace {
 
@@ -45,11 +43,6 @@ constexpr wchar_t kGithubUrl[] = L"https://github.com/Geijoh/Backdropper";
 constexpr wchar_t kGhostscriptUrl[] = L"https://ghostscript.com/releases/gsdnld.html";
 constexpr wchar_t kUpdaterExeName[] = L"BackdropperUpdater.exe";
 constexpr wchar_t kLatestVersionUrl[] = L"https://github.com/Geijoh/Backdropper/releases/latest/download/backdropper-version.txt";
-
-constexpr std::array<const wchar_t*, kBackdropperFormatCount> kFormatLabels = {
-    L"PNG", L"WEBP", L"GIF", L"ICO", L"SVG", L"PSD",
-    L"AI", L"EPS", L"PDF", L"AVIF", L"TGA", L"DDS",
-};
 
 enum class Hit {
     None,
@@ -112,6 +105,11 @@ enum class ViewMode {
     List,
     Details,
     Tiles,
+};
+
+constexpr std::array<ViewMode, 7> kViewMenuOrder = {
+    ViewMode::ExtraLarge, ViewMode::Large, ViewMode::Medium, ViewMode::Small,
+    ViewMode::List, ViewMode::Details, ViewMode::Tiles
 };
 
 enum class AboutActionIcon {
@@ -261,6 +259,16 @@ RectF RectFOf(const RECT& r)
         static_cast<REAL>(r.top),
         static_cast<REAL>(r.right - r.left),
         static_cast<REAL>(r.bottom - r.top));
+}
+
+void AddRoundedRect(GraphicsPath& path, const RectF& r, REAL radius)
+{
+    const REAL d = radius * 2;
+    path.AddArc(r.X, r.Y, d, d, 180, 90);
+    path.AddArc(r.X + r.Width - d, r.Y, d, d, 270, 90);
+    path.AddArc(r.X + r.Width - d, r.Y + r.Height - d, d, d, 0, 90);
+    path.AddArc(r.X, r.Y + r.Height - d, d, d, 90, 90);
+    path.CloseFigure();
 }
 
 bool IsEmptyRect(const RECT& r)
@@ -517,40 +525,6 @@ bool LaunchUpdater(HWND owner, bool force)
     return true;
 }
 
-std::wstring TrimVersion(std::wstring text)
-{
-    if (!text.empty() && text[0] == L'v') {
-        text.erase(text.begin());
-    }
-    while (!text.empty() && iswspace(text.front())) {
-        text.erase(text.begin());
-    }
-    while (!text.empty() && iswspace(text.back())) {
-        text.pop_back();
-    }
-    return text;
-}
-
-bool ParseVersion(const std::wstring& text, int parts[3])
-{
-    return swscanf_s(text.c_str(), L"%d.%d.%d", &parts[0], &parts[1], &parts[2]) == 3;
-}
-
-int CompareVersions(const std::wstring& left, const std::wstring& right)
-{
-    int a[3] = {};
-    int b[3] = {};
-    if (!ParseVersion(left, a) || !ParseVersion(right, b)) {
-        return 0;
-    }
-    for (int i = 0; i < 3; ++i) {
-        if (a[i] != b[i]) {
-            return a[i] < b[i] ? -1 : 1;
-        }
-    }
-    return 0;
-}
-
 bool ReadAsciiFile(const std::wstring& path, std::wstring* text)
 {
     HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -600,131 +574,15 @@ bool FetchLatestVersion(std::wstring* version)
     }
 
     *version = TrimVersion(text);
-    int parts[3] = {};
+    std::array<int, 3> parts {};
     return ParseVersion(*version, parts);
-}
-
-std::wstring Lower(std::wstring value)
-{
-    for (wchar_t& ch : value) {
-        ch = static_cast<wchar_t>(std::towlower(ch));
-    }
-    return value;
-}
-
-bool ExtensionListContains(const std::wstring& extensions, const wchar_t* extension)
-{
-    const std::wstring wanted = Lower(extension);
-    std::wstring token;
-    for (const wchar_t ch : extensions + L",") {
-        if (ch == L',' || ch == L';' || iswspace(ch)) {
-            if (Lower(token) == wanted) {
-                return true;
-            }
-            token.clear();
-        } else {
-            token.push_back(ch);
-        }
-    }
-    return false;
-}
-
-bool WicSupportsExtension(const wchar_t* extension)
-{
-    const HRESULT init = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
-    const bool uninitialize = init == S_OK || init == S_FALSE;
-    if (FAILED(init) && init != RPC_E_CHANGED_MODE) {
-        return wcscmp(extension, L".png") == 0;
-    }
-
-    ComPtr<IWICImagingFactory> factory;
-    HRESULT hr = CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&factory));
-    if (FAILED(hr)) {
-        if (uninitialize) {
-            CoUninitialize();
-        }
-        return wcscmp(extension, L".png") == 0;
-    }
-
-    ComPtr<IEnumUnknown> decoders;
-    hr = factory->CreateComponentEnumerator(WICDecoder, WICComponentEnumerateDefault, &decoders);
-    bool supported = false;
-    if (SUCCEEDED(hr)) {
-        ComPtr<IUnknown> unknown;
-        while (!supported && decoders->Next(1, &unknown, nullptr) == S_OK) {
-            ComPtr<IWICBitmapCodecInfo> info;
-            if (SUCCEEDED(unknown.As(&info))) {
-                UINT length = 0;
-                if (SUCCEEDED(info->GetFileExtensions(0, nullptr, &length)) && length > 0) {
-                    std::wstring list(length, L'\0');
-                    if (SUCCEEDED(info->GetFileExtensions(length, list.data(), &length))) {
-                        supported = ExtensionListContains(list, extension);
-                    }
-                }
-            }
-            unknown.Reset();
-        }
-    }
-
-    if (uninitialize) {
-        CoUninitialize();
-    }
-    return supported;
-}
-
-bool HasGhostscript()
-{
-    wchar_t path[MAX_PATH] = {};
-    if (SearchPathW(nullptr, L"gswin64c.exe", nullptr, ARRAYSIZE(path), path, nullptr)
-        || SearchPathW(nullptr, L"gswin32c.exe", nullptr, ARRAYSIZE(path), path, nullptr)) {
-        return true;
-    }
-
-    auto findUnder = [](const wchar_t* base, const wchar_t* exe) {
-        std::wstring pattern = std::wstring(base) + L"\\gs*";
-        WIN32_FIND_DATAW data = {};
-        HANDLE find = FindFirstFileW(pattern.c_str(), &data);
-        while (find != INVALID_HANDLE_VALUE) {
-            if ((data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && wcscmp(data.cFileName, L".") != 0 && wcscmp(data.cFileName, L"..") != 0) {
-                std::wstring candidate = std::wstring(base) + L"\\" + data.cFileName + L"\\bin\\" + exe;
-                if (GetFileAttributesW(candidate.c_str()) != INVALID_FILE_ATTRIBUTES) {
-                    FindClose(find);
-                    return true;
-                }
-            }
-            if (!FindNextFileW(find, &data)) {
-                break;
-            }
-        }
-        if (find != INVALID_HANDLE_VALUE) {
-            FindClose(find);
-        }
-        return false;
-    };
-
-    return findUnder(L"C:\\Program Files\\gs", L"gswin64c.exe")
-        || findUnder(L"C:\\Program Files (x86)\\gs", L"gswin32c.exe");
-}
-
-bool BuiltInFormat(const wchar_t* extension)
-{
-    return wcscmp(extension, L".png") == 0 || wcscmp(extension, L".svg") == 0
-        || wcscmp(extension, L".pdf") == 0 || wcscmp(extension, L".ai") == 0
-        || wcscmp(extension, L".psd") == 0 || wcscmp(extension, L".tga") == 0;
 }
 
 void RefreshFormatAvailability()
 {
-    g_state.ghostscriptInstalled = HasGhostscript();
+    g_state.ghostscriptInstalled = BackdropperHasGhostscript();
     for (size_t i = 0; i < kBackdropperFormats.size(); ++i) {
-        const wchar_t* extension = kBackdropperFormats[i];
-        if (wcscmp(extension, L".eps") == 0) {
-            g_state.formatAvailable[i] = g_state.ghostscriptInstalled;
-        } else if (BuiltInFormat(extension)) {
-            g_state.formatAvailable[i] = true;
-        } else {
-            g_state.formatAvailable[i] = WicSupportsExtension(extension);
-        }
+        g_state.formatAvailable[i] = CanRegisterBackdropperFormat(kBackdropperFormats[i]);
     }
 }
 
@@ -737,7 +595,7 @@ std::wstring FormatStatus(size_t index)
     if (wcscmp(extension, L".ai") == 0) {
         return g_state.ghostscriptInstalled ? L"PDF + legacy" : L"PDF only";
     }
-    if (BuiltInFormat(extension)) {
+    if (BackdropperHasBuiltInRenderer(extension)) {
         return L"Built in";
     }
     return g_state.formatAvailable[index] ? L"Windows codec" : L"Codec missing";
@@ -1134,13 +992,8 @@ void DrawRounded(Graphics& g, const RECT& rect, float radiusDip, const Color& fi
         return;
     }
 
-    const REAL d = radius * 2;
     GraphicsPath path;
-    path.AddArc(r.X, r.Y, d, d, 180, 90);
-    path.AddArc(r.X + r.Width - d, r.Y, d, d, 270, 90);
-    path.AddArc(r.X + r.Width - d, r.Y + r.Height - d, d, d, 0, 90);
-    path.AddArc(r.X, r.Y + r.Height - d, d, d, 90, 90);
-    path.CloseFigure();
+    AddRoundedRect(path, r, radius);
     SolidBrush brush(fill);
     g.FillPath(&brush, &path);
 }
@@ -1149,14 +1002,9 @@ void DrawRoundedBorder(Graphics& g, const RECT& rect, float radiusDip, const Col
 {
     const RectF r = RectFOf(rect);
     const REAL radius = static_cast<REAL>(Px(radiusDip));
-    const REAL d = radius * 2;
 
     GraphicsPath path;
-    path.AddArc(r.X, r.Y, d, d, 180, 90);
-    path.AddArc(r.X + r.Width - d, r.Y, d, d, 270, 90);
-    path.AddArc(r.X + r.Width - d, r.Y + r.Height - d, d, d, 0, 90);
-    path.AddArc(r.X, r.Y + r.Height - d, d, d, 90, 90);
-    path.CloseFigure();
+    AddRoundedRect(path, r, radius);
 
     SolidBrush brush(fill);
     g.FillPath(&brush, &path);
@@ -1831,12 +1679,7 @@ void DrawExplorerPreview(Graphics& g, const RECT& frame, const Theme& t)
     GraphicsPath clip;
     const RectF rf = RectFOf(frame);
     const REAL radius = static_cast<REAL>(Px(8));
-    const REAL d = radius * 2;
-    clip.AddArc(rf.X, rf.Y, d, d, 180, 90);
-    clip.AddArc(rf.X + rf.Width - d, rf.Y, d, d, 270, 90);
-    clip.AddArc(rf.X + rf.Width - d, rf.Y + rf.Height - d, d, d, 0, 90);
-    clip.AddArc(rf.X, rf.Y + rf.Height - d, d, d, 90, 90);
-    clip.CloseFigure();
+    AddRoundedRect(clip, rf, radius);
     g.SetClip(&clip, CombineModeReplace);
 
     const double x = Dip(frame.left);
@@ -1892,20 +1735,15 @@ void DrawViewMenu(Graphics& g, const Theme& t)
     DrawRounded(g, RectDip(x + 1, y + 8, w - 2, h), 8, EffectiveDark() ? Rgba(0, 0, 0, 115) : Rgba(0, 0, 0, 28));
     DrawRounded(g, RectDip(x, y + 3, w, h), 8, EffectiveDark() ? Rgba(0, 0, 0, 77) : Rgba(0, 0, 0, 12));
     DrawRoundedBorder(g, g_layout.viewMenu, 8, t.menuBg, t.stroke);
-    const std::array<ViewMode, 7> order = {
-        ViewMode::ExtraLarge, ViewMode::Large, ViewMode::Medium, ViewMode::Small,
-        ViewMode::List, ViewMode::Details, ViewMode::Tiles
-    };
-
     for (int i = 0; i < 7; ++i) {
         const RECT item = g_layout.menuItems[i];
         if (g_hover == static_cast<Hit>(static_cast<int>(Hit::MenuExtraLarge) + i)) {
             DrawRounded(g, item, 5, t.rowHover);
         }
-        if (g_state.view == order[i]) {
+        if (g_state.view == kViewMenuOrder[i]) {
             DrawCheck(g, Dip(item.left) + 9, Dip(item.top) + 10, t.accent);
         }
-        DrawTextBlock(g, ViewLabel(order[i]), RectDip(Dip(item.left) + 34, Dip(item.top), Dip(item.right - item.left) - 40, 34),
+        DrawTextBlock(g, ViewLabel(kViewMenuOrder[i]), RectDip(Dip(item.left) + 34, Dip(item.top), Dip(item.right - item.left) - 40, 34),
             13, t.fg, FontStyleRegular, StringAlignmentNear, StringAlignmentCenter);
     }
 }
@@ -2340,7 +2178,7 @@ void DrawFormatsDialog(Graphics& g, const RECT& client, const Theme& t)
 
         const Color title = available ? t.fg : Color(120, t.fg.GetR(), t.fg.GetG(), t.fg.GetB());
         const Color sub = available ? t.fg2 : Color(95, t.fg2.GetR(), t.fg2.GetG(), t.fg2.GetB());
-        DrawTextBlock(g, kFormatLabels[i], RectDip(Dip(row.left) + 12, Dip(row.top) + 7, 54, 16), 12.5f, title, FontStyleBold);
+        DrawTextBlock(g, BackdropperFormatLabel(kBackdropperFormats[i]), RectDip(Dip(row.left) + 12, Dip(row.top) + 7, 54, 16), 12.5f, title, FontStyleBold);
         DrawTextBlock(g, FormatStatus(i), RectDip(Dip(row.left) + 68, Dip(row.top) + 8, 112, 16), 11, sub);
 
         const RECT sw = RectDip(Dip(row.right) - 52, Dip(row.top) + 11, 40, 20);
@@ -2766,11 +2604,7 @@ void ActivateHit(HWND window, Hit hit)
     case Hit::MenuDetails:
     case Hit::MenuTiles: {
         const int index = static_cast<int>(hit) - static_cast<int>(Hit::MenuExtraLarge);
-        const std::array<ViewMode, 7> order = {
-            ViewMode::ExtraLarge, ViewMode::Large, ViewMode::Medium, ViewMode::Small,
-            ViewMode::List, ViewMode::Details, ViewMode::Tiles
-        };
-        g_state.view = order[index];
+        g_state.view = kViewMenuOrder[index];
         g_state.viewMenuOpen = false;
         InvalidateRect(window, nullptr, TRUE);
         break;

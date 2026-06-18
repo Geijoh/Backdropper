@@ -22,6 +22,7 @@ endforeach()
 add_library(BackdropperThumb SHARED
   src/ThumbProvider/BackdropperThumb.cpp
   src/ThumbProvider/BackdropperThumb.def
+  src/common/format_support.cpp
   src/common/render.cpp
   src/common/settings.cpp
   src/common/thumbnail_cache.cpp
@@ -33,6 +34,7 @@ target_link_libraries(BackdropperThumb PRIVATE windowscodecs shlwapi shell32 shc
 add_executable(BackdropperSettings WIN32
   src/Settings/BackdropperSettings.cpp
   src/resources/Backdropper.rc
+  src/common/format_support.cpp
   src/common/settings.cpp
   src/common/thumbnail_cache.cpp
 )
@@ -47,9 +49,11 @@ set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT B
 
 add_executable(BackdropperUpdater
   src/Updater/BackdropperUpdater.cpp
+  src/common/thumbnail_cache.cpp
 )
 target_compile_definitions(BackdropperUpdater PRIVATE UNICODE _UNICODE NOMINMAX)
-target_link_libraries(BackdropperUpdater PRIVATE shell32 urlmon)
+target_include_directories(BackdropperUpdater PRIVATE src/common)
+target_link_libraries(BackdropperUpdater PRIVATE shell32 ole32 urlmon)
 add_dependencies(BackdropperSettings BackdropperUpdater)
 add_custom_command(TARGET BackdropperSettings POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -59,6 +63,7 @@ add_custom_command(TARGET BackdropperSettings POST_BUILD
 
 add_executable(RenderSmoke
   src/RenderSmoke/RenderSmoke.cpp
+  src/common/format_support.cpp
   src/common/render.cpp
 )
 target_compile_definitions(RenderSmoke PRIVATE UNICODE _UNICODE NOMINMAX _SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS)
