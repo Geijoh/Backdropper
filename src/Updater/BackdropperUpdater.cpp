@@ -14,7 +14,7 @@ namespace fs = std::filesystem;
 namespace {
 
 constexpr wchar_t kVersionUrl[] = L"https://github.com/Geijoh/Backdropper/releases/latest/download/backdropper-version.txt";
-constexpr wchar_t kZipUrl[] = L"https://github.com/Geijoh/Backdropper/releases/latest/download/Backdropper-latest-windows-x64.zip";
+constexpr wchar_t kLatestDownloadBaseUrl[] = L"https://github.com/Geijoh/Backdropper/releases/latest/download/";
 
 std::wstring Quote(const std::wstring& value)
 {
@@ -46,6 +46,11 @@ int CompareVersions(const std::wstring& left, const std::wstring& right)
     return 0;
 }
 
+bool ShouldInstallUpdate(const std::wstring& latest, const std::wstring& current, bool force)
+{
+    return force || CompareVersions(latest, current) > 0;
+}
+
 std::wstring TrimVersion(std::wstring text)
 {
     if (!text.empty() && text[0] == L'v') {
@@ -58,6 +63,11 @@ std::wstring TrimVersion(std::wstring text)
         text.pop_back();
     }
     return text;
+}
+
+std::wstring ZipAssetName(const std::wstring& version)
+{
+    return L"Backdropper-" + version + L"-windows-x64.zip";
 }
 
 std::wstring ReadTextFile(const fs::path& path)
@@ -216,7 +226,10 @@ int SelfTest()
     if (CompareVersions(L"1.2.3", L"1.2.2") <= 0) return 1;
     if (CompareVersions(L"1.2.3", L"1.2.3") != 0) return 1;
     if (CompareVersions(L"1.2.3", L"1.3.0") >= 0) return 1;
+    if (!ShouldInstallUpdate(L"1.2.3", L"1.2.3", true)) return 1;
+    if (ShouldInstallUpdate(L"1.2.3", L"1.2.3", false)) return 1;
     if (TrimVersion(L"v0.5.3\r\n") != L"0.5.3") return 1;
+    if (ZipAssetName(L"0.5.8") != L"Backdropper-0.5.8-windows-x64.zip") return 1;
     if (!RunAndWait(TarPath(), L"--version")) return 1;
     std::wcout << L"OK" << std::endl;
     return 0;
@@ -227,6 +240,7 @@ struct Args {
     DWORD currentPid = 0;
     std::wstring currentVersion = L"0.0.0";
     bool selfTest = false;
+    bool force = false;
 };
 
 Args ParseArgs()
@@ -238,6 +252,8 @@ Args ParseArgs()
         const std::wstring arg = argv[i];
         if (arg == L"--self-test") {
             args.selfTest = true;
+        } else if (arg == L"--force") {
+            args.force = true;
         } else if (arg == L"--install-dir" && i + 1 < argc) {
             args.installDir = argv[++i];
         } else if (arg == L"--current-pid" && i + 1 < argc) {
@@ -273,7 +289,6 @@ int wmain()
         tempRoot = TempPath(L"BackdropperUpdate-" + std::to_wstring(GetCurrentProcessId()) + L"-" + std::to_wstring(GetTickCount64()));
         fs::create_directories(tempRoot);
         const fs::path versionFile = tempRoot / L"backdropper-version.txt";
-        const fs::path zipPath = tempRoot / L"Backdropper-latest-windows-x64.zip";
         const fs::path extractDir = tempRoot / L"extract";
 
         WriteStep(L"Checking latest GitHub release...");
@@ -281,7 +296,7 @@ int wmain()
             throw std::runtime_error("Could not download version metadata.");
         }
         const std::wstring latestVersion = ReadTextFile(versionFile);
-        if (CompareVersions(latestVersion, args.currentVersion) <= 0) {
+        if (!ShouldInstallUpdate(latestVersion, args.currentVersion, args.force)) {
             WriteStep(L"Already up to date. Current version: " + args.currentVersion + L".");
             Sleep(2000);
             StartBackdropper(installDir);
@@ -289,8 +304,10 @@ int wmain()
             return 0;
         }
 
-        WriteStep(L"Downloading Backdropper-latest-windows-x64.zip...");
-        if (!Download(kZipUrl, zipPath)) {
+        const std::wstring zipAssetName = ZipAssetName(latestVersion);
+        const fs::path zipPath = tempRoot / zipAssetName;
+        WriteStep(L"Downloading " + zipAssetName + L"...");
+        if (!Download(std::wstring(kLatestDownloadBaseUrl) + zipAssetName, zipPath)) {
             throw std::runtime_error("Could not download update ZIP.");
         }
 

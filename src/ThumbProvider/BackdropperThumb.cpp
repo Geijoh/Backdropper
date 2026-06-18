@@ -1,4 +1,5 @@
 #include "render.h"
+#include "settings.h"
 #include "thumbnail_cache.h"
 
 #include <shlobj.h>
@@ -8,7 +9,6 @@
 #include <wincodec.h>
 #include <wrl/client.h>
 
-#include <array>
 #include <cwctype>
 #include <string>
 
@@ -18,10 +18,6 @@ namespace {
 
 constexpr wchar_t kClsidString[] = L"{7F08B58C-8D1C-44D3-9A73-AB554FF53B1D}";
 constexpr wchar_t kThumbHandlerKey[] = L"{E357FCCD-A995-4576-B01F-234630154E96}";
-constexpr std::array<const wchar_t*, 12> kExtensions = {
-    L".png", L".webp", L".gif", L".ico", L".svg", L".psd",
-    L".ai", L".eps", L".pdf", L".avif", L".tga", L".dds",
-};
 
 const CLSID CLSID_BackdropperThumb = {
     0x7f08b58c, 0x8d1c, 0x44d3, {0x9a, 0x73, 0xab, 0x55, 0x4f, 0xf5, 0x3b, 0x1d}
@@ -247,6 +243,17 @@ bool CanRegisterExtension(const wchar_t* extension)
     return WicSupportsExtension(extension) || HasBuiltInFallbackRenderer(extension);
 }
 
+bool BackupExists(const wchar_t* extension)
+{
+    HKEY key = nullptr;
+    const LSTATUS status = RegOpenKeyExW(HKEY_CURRENT_USER, BackupPath(extension).c_str(), 0, KEY_READ, &key);
+    if (status == ERROR_SUCCESS) {
+        RegCloseKey(key);
+        return true;
+    }
+    return false;
+}
+
 void SavePreviousHandler(const wchar_t* extension)
 {
     HKEY backup = nullptr;
@@ -336,8 +343,13 @@ HRESULT RegisterServer()
     }
 
     bool registeredAny = false;
-    for (const wchar_t* extension : kExtensions) {
-        if (!CanRegisterExtension(extension)) {
+    const BackdropperSettings settings = LoadBackdropperSettings();
+    for (size_t i = 0; i < kBackdropperFormats.size(); ++i) {
+        const wchar_t* extension = kBackdropperFormats[i];
+        if (!settings.enabledFormats[i] || !CanRegisterExtension(extension)) {
+            if (BackupExists(extension)) {
+                RestorePreviousHandler(extension);
+            }
             continue;
         }
 
@@ -365,7 +377,7 @@ HRESULT RegisterServer()
 
 HRESULT UnregisterServer()
 {
-    for (const wchar_t* extension : kExtensions) {
+    for (const wchar_t* extension : kBackdropperFormats) {
         RestorePreviousHandler(extension);
     }
     const std::wstring clsidPath = std::wstring(L"Software\\Classes\\CLSID\\") + kClsidString;

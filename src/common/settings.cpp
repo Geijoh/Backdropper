@@ -1,6 +1,7 @@
 #include "settings.h"
 
 #include <algorithm>
+#include <cwctype>
 #include <cwchar>
 
 namespace {
@@ -34,6 +35,15 @@ void WriteString(HKEY key, const wchar_t* name, const std::wstring& value)
 void WriteDword(HKEY key, const wchar_t* name, DWORD value)
 {
     RegSetValueExW(key, name, 0, REG_DWORD, reinterpret_cast<const BYTE*>(&value), sizeof(value));
+}
+
+std::wstring FormatEnabledName(const wchar_t* extension)
+{
+    std::wstring name = L"Format";
+    for (const wchar_t ch : std::wstring(extension)) {
+        name.push_back(ch == L'.' ? L'_' : static_cast<wchar_t>(std::towupper(ch)));
+    }
+    return name;
 }
 
 BackdropMode ParseMode(const std::wstring& value)
@@ -74,6 +84,10 @@ BackdropperSettings LoadBackdropperSettings()
     ParseColor(ReadString(key, L"CheckerColorB", L"#C8C8C8").c_str(), &settings.checkerB);
     settings.checkerSize = std::max(1u, std::min(64u, static_cast<UINT>(ReadDword(key, L"CheckerSize", 8))));
     settings.deleteThumbnailDbsOnSave = ReadDword(key, L"DeleteThumbnailDbsOnSave", 1) != 0;
+    for (size_t i = 0; i < kBackdropperFormats.size(); ++i) {
+        const std::wstring name = FormatEnabledName(kBackdropperFormats[i]);
+        settings.enabledFormats[i] = ReadDword(key, name.c_str(), 1) != 0;
+    }
     RegCloseKey(key);
     return settings;
 }
@@ -93,6 +107,10 @@ HRESULT SaveBackdropperSettings(const BackdropperSettings& settings)
     WriteString(key, L"CheckerColorB", FormatColor(settings.checkerB));
     WriteDword(key, L"CheckerSize", std::max(1u, std::min(64u, settings.checkerSize)));
     WriteDword(key, L"DeleteThumbnailDbsOnSave", settings.deleteThumbnailDbsOnSave ? 1 : 0);
+    for (size_t i = 0; i < kBackdropperFormats.size(); ++i) {
+        const std::wstring name = FormatEnabledName(kBackdropperFormats[i]);
+        WriteDword(key, name.c_str(), settings.enabledFormats[i] ? 1 : 0);
+    }
     RegCloseKey(key);
     return S_OK;
 }

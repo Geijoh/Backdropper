@@ -51,6 +51,11 @@ add_executable(BackdropperUpdater
 target_compile_definitions(BackdropperUpdater PRIVATE UNICODE _UNICODE NOMINMAX)
 target_link_libraries(BackdropperUpdater PRIVATE shell32 urlmon)
 add_dependencies(BackdropperSettings BackdropperUpdater)
+add_custom_command(TARGET BackdropperSettings POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    "${CMAKE_CURRENT_SOURCE_DIR}/PRIVACY.md"
+    "$<TARGET_FILE_DIR:BackdropperSettings>/PRIVACY.md"
+)
 
 add_executable(RenderSmoke
   src/RenderSmoke/RenderSmoke.cpp

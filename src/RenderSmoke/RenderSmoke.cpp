@@ -130,6 +130,16 @@ HRESULT CreateSvgStream(IStream** stream)
     return CreateMemoryStream(reinterpret_cast<const BYTE*>(svg), sizeof(svg) - 1, stream);
 }
 
+HRESULT CreateSvgSymbolStream(IStream** stream)
+{
+    static constexpr char svg[] =
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"2\" height=\"2\" viewBox=\"0 0 2 2\">"
+        "<defs><symbol id=\"mark\" viewBox=\"0 0 100 100\"><rect x=\"50\" y=\"0\" width=\"50\" height=\"100\" fill=\"red\"/></symbol></defs>"
+        "<use href=\"#mark\" width=\"2\" height=\"2\"/>"
+        "</svg>";
+    return CreateMemoryStream(reinterpret_cast<const BYTE*>(svg), sizeof(svg) - 1, stream);
+}
+
 HRESULT CreatePdfStream(IStream** stream)
 {
     std::string pdf = "%PDF-1.4\n";
@@ -200,6 +210,40 @@ bool Renders(IStream* stream, const BackdropperSettings& settings)
     return true;
 }
 
+bool ContainsRedPixel(IStream* stream, const BackdropperSettings& settings)
+{
+    HBITMAP bitmap = nullptr;
+    WTS_ALPHATYPE alpha = WTSAT_UNKNOWN;
+    HRESULT hr = RenderBackdropperThumbnail(stream, 32, settings, &bitmap, &alpha);
+    if (FAILED(hr)) {
+        std::printf("FAIL: RenderBackdropperThumbnail (0x%08lx)\n", static_cast<unsigned long>(hr));
+        return false;
+    }
+
+    DIBSECTION section = {};
+    if (!GetObjectW(bitmap, sizeof(section), &section) || !section.dsBm.bmBits) {
+        DeleteObject(bitmap);
+        std::puts("FAIL: GetObject");
+        return false;
+    }
+
+    const BYTE* bits = static_cast<const BYTE*>(section.dsBm.bmBits);
+    const LONG stride = section.dsBm.bmWidthBytes;
+    bool found = false;
+    for (LONG y = 0; y < section.dsBm.bmHeight && !found; ++y) {
+        for (LONG x = 0; x < section.dsBm.bmWidth; ++x) {
+            const BYTE* pixel = bits + (static_cast<size_t>(y) * stride) + (x * 4);
+            if (pixel[2] > 180 && pixel[1] < 80 && pixel[0] < 80) {
+                found = true;
+                break;
+            }
+        }
+    }
+
+    DeleteObject(bitmap);
+    return found;
+}
+
 }
 
 int main()
@@ -247,6 +291,15 @@ int main()
         return Fail("CreateSvgStream", hr);
     }
     const bool svgTransparentBecameBackground = TransparentPixelBecameBackground(svg.Get(), settings);
+    const bool svgContentRendered = ContainsRedPixel(svg.Get(), settings);
+
+    ComPtr<IStream> svgSymbol;
+    hr = CreateSvgSymbolStream(&svgSymbol);
+    if (FAILED(hr)) {
+        CoUninitialize();
+        return Fail("CreateSvgSymbolStream", hr);
+    }
+    const bool svgSymbolContentRendered = ContainsRedPixel(svgSymbol.Get(), settings);
 
     ComPtr<IStream> pdf;
     hr = CreatePdfStream(&pdf);
@@ -270,10 +323,19 @@ int main()
 
     CoUninitialize();
     if (!pngTransparentBecameBackground || !tgaTransparentBecameBackground
-        || !psdTransparentBecameBackground || !svgTransparentBecameBackground || !pdfRendered) {
+        || !psdTransparentBecameBackground || !svgTransparentBecameBackground) {
         return Fail("transparent pixel was not composited");
     }
+    if (!svgContentRendered) {
+        return Fail("SVG content was blank");
+    }
+    if (!svgSymbolContentRendered) {
+        return Fail("SVG symbol/use content was blank");
+    }
+    if (!pdfRendered) {
+        return Fail("PDF did not render");
+    }
 
-    std::puts("OK: PNG/TGA/PSD/SVG transparency composited, PDF rendered, corrupt input rejected.");
+    std::puts("OK: PNG/TGA/PSD/SVG transparency composited, SVG content rendered, PDF rendered, corrupt input rejected.");
     return 0;
 }

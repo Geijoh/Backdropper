@@ -491,9 +491,12 @@ HRESULT RenderD2D(UINT width, UINT height, Draw draw, DecodedImage* image)
     return S_OK;
 }
 
+std::vector<BYTE> NormalizeSvgForDirect2D(const std::vector<BYTE>& bytes);
+
 HRESULT DecodeSvg(const std::vector<BYTE>& bytes, UINT maxSize, DecodedImage* image)
 {
-    ComPtr<IStream> stream = StreamFromBytes(bytes);
+    const std::vector<BYTE> normalized = NormalizeSvgForDirect2D(bytes);
+    ComPtr<IStream> stream = StreamFromBytes(normalized);
     if (!stream) {
         return E_OUTOFMEMORY;
     }
@@ -505,6 +508,37 @@ HRESULT DecodeSvg(const std::vector<BYTE>& bytes, UINT maxSize, DecodedImage* im
         context->DrawSvgDocument(document.Get());
         return S_OK;
     }, image);
+}
+
+bool ReplaceAll(std::string* text, const char* from, const char* to)
+{
+    bool changed = false;
+    const size_t fromLength = strlen(from);
+    const size_t toLength = strlen(to);
+    size_t pos = 0;
+    while ((pos = text->find(from, pos)) != std::string::npos) {
+        text->replace(pos, fromLength, to);
+        pos += toLength;
+        changed = true;
+    }
+    return changed;
+}
+
+std::vector<BYTE> NormalizeSvgForDirect2D(const std::vector<BYTE>& bytes)
+{
+    std::string text(bytes.begin(), bytes.end());
+    // ponytail: Direct2D ignores <symbol> and SVG2 href; nested <svg> preserves symbol viewBox for sprites.
+    bool changed = ReplaceAll(&text, "<symbol", "<svg");
+    changed = ReplaceAll(&text, "</symbol>", "</svg>") || changed;
+    changed = ReplaceAll(&text, " href=", " xlink:href=") || changed;
+    if (changed && text.find("xmlns:xlink=") == std::string::npos) {
+        const size_t svg = text.find("<svg");
+        const size_t end = svg == std::string::npos ? std::string::npos : text.find('>', svg);
+        if (end != std::string::npos) {
+            text.insert(end, " xmlns:xlink=\"http://www.w3.org/1999/xlink\"");
+        }
+    }
+    return changed ? std::vector<BYTE>(text.begin(), text.end()) : bytes;
 }
 
 class RoInitializeScope {

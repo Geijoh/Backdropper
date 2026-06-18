@@ -40,7 +40,7 @@ Some formats may use optional local renderers installed on your PC, such as Ghos
 
 Backdropper does not require network access for thumbnail generation or settings.
 
-The app may open your default browser when you click links such as GitHub or Privacy Policy.
+The app may open your default browser when you click external links such as GitHub.
 
 If you use the built-in updater, Backdropper contacts GitHub Releases to check the latest available version and download the Windows build ZIP. GitHub may receive standard request information such as your IP address, user agent, and download request metadata under GitHub's own policies.
 
