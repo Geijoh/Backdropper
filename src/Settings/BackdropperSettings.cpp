@@ -23,9 +23,12 @@ constexpr int IdCheckerA = 201;
 constexpr int IdCheckerB = 202;
 constexpr int IdCheckerSize = 203;
 
-constexpr wchar_t kPngThumbHandlerKey[] =
-    L"Software\\Classes\\.png\\shellex\\{E357FCCD-A995-4576-B01F-234630154E96}";
+constexpr wchar_t kThumbHandlerKey[] = L"{E357FCCD-A995-4576-B01F-234630154E96}";
 constexpr wchar_t kBackdropperClsid[] = L"{7F08B58C-8D1C-44D3-9A73-AB554FF53B1D}";
+constexpr std::array<const wchar_t*, 12> kExtensions = {
+    L".png", L".webp", L".gif", L".ico", L".svg", L".psd",
+    L".ai", L".eps", L".pdf", L".avif", L".tga", L".dds",
+};
 
 #define WIDEN_TEXT2(value) L##value
 #define WIDEN_TEXT(value) WIDEN_TEXT2(value)
@@ -340,14 +343,23 @@ bool RunRegsvr(HWND owner, bool unregister)
     return exitCode == 0;
 }
 
-bool IsPngHandlerRegistered()
+std::wstring ExtensionHandlerPath(const wchar_t* extension)
+{
+    return std::wstring(L"Software\\Classes\\") + extension + L"\\shellex\\" + kThumbHandlerKey;
+}
+
+bool IsBackdropperHandlerRegistered()
 {
     wchar_t value[128] = {};
-    DWORD bytes = sizeof(value);
-    if (RegGetValueW(HKEY_CURRENT_USER, kPngThumbHandlerKey, nullptr, RRF_RT_REG_SZ, nullptr, value, &bytes) != ERROR_SUCCESS) {
-        return false;
+    for (const wchar_t* extension : kExtensions) {
+        DWORD bytes = sizeof(value);
+        if (RegGetValueW(HKEY_CURRENT_USER, ExtensionHandlerPath(extension).c_str(), nullptr,
+                RRF_RT_REG_SZ, nullptr, value, &bytes) == ERROR_SUCCESS
+            && _wcsicmp(value, kBackdropperClsid) == 0) {
+            return true;
+        }
     }
-    return _wcsicmp(value, kBackdropperClsid) == 0;
+    return false;
 }
 
 void OpenDialog(HWND window, const std::wstring& title, const std::wstring& body)
@@ -476,7 +488,7 @@ void CalculateLayout(HWND window)
     const double footerY = h - 58;
     const double saveW = 70;
     const double unregW = 96;
-    const double regW = 108;
+    const double regW = 132;
     const double githubW = 36;
     const double saveX = w - 20 - saveW;
     const double unregX = saveX - 10 - 9 - 10 - unregW;
@@ -722,8 +734,8 @@ void DrawButton(Graphics& g, const RECT& rect, const std::wstring& text, const T
 std::wstring RegistrationText()
 {
     return g_state.registered
-        ? L"Registered as the .png thumbnail handler"
-        : L"Not registered \u2014 using the default Windows handler";
+        ? L"Registered for supported image formats"
+        : L"Not registered \u2014 using default Windows handlers";
 }
 
 Color RegistrationDot(const Theme& t)
@@ -931,11 +943,11 @@ struct FileItem {
 
 constexpr std::array<FileItem, 6> kFiles = { {
     { L"app-logo.png", L"PNG File", L"48 KB", L"6/14/2026 9:21 AM" },
-    { L"cloud.png", L"PNG File", L"22 KB", L"6/12/2026 4:03 PM" },
-    { L"star-sticker.png", L"PNG File", L"31 KB", L"6/9/2026 11:47 AM" },
-    { L"avatar.png", L"PNG File", L"64 KB", L"5/30/2026 2:15 PM" },
-    { L"wordmark.png", L"PNG File", L"18 KB", L"5/28/2026 8:52 AM" },
-    { L"verified-badge.png", L"PNG File", L"27 KB", L"5/21/2026 6:30 PM" },
+    { L"cloud.webp", L"WEBP File", L"22 KB", L"6/12/2026 4:03 PM" },
+    { L"star-sticker.svg", L"SVG File", L"31 KB", L"6/9/2026 11:47 AM" },
+    { L"avatar.avif", L"AVIF File", L"64 KB", L"5/30/2026 2:15 PM" },
+    { L"wordmark.pdf", L"PDF File", L"18 KB", L"5/28/2026 8:52 AM" },
+    { L"verified-badge.ico", L"ICO File", L"27 KB", L"5/21/2026 6:30 PM" },
 } };
 
 std::wstring ViewLabel(ViewMode view)
@@ -1213,7 +1225,7 @@ void DrawLeftPane(Graphics& g, const Theme& t)
 
     DrawTextBlock(g, L"Backdropper", RectDip(22, 61, 140, 28), 21, t.fg, FontStyleBold);
     DrawTextBlock(g, (std::wstring(L"v") + kBackdropperVersion), RectDip(166, 69, 72, 16), 11, t.fg2);
-    DrawTextBlock(g, L"PNG thumbnail background", RectDip(22, 91, 260, 20), 13, t.fg2);
+    DrawTextBlock(g, L"Transparent image backgrounds", RectDip(22, 91, 280, 20), 13, t.fg2);
 
     double cardY = 116;
     double bgCardH = 128;
@@ -1302,7 +1314,7 @@ void DrawFooter(Graphics& g, const RECT& client, const Theme& t)
         g_hover == Hit::Github ? (EffectiveDark() ? Rgba(255, 255, 255, 20) : Rgba(0, 0, 0, 10)) : t.ctrl,
         t.ctrlBorder);
     DrawGithubIcon(g, g_layout.githubBtn, t);
-    DrawButton(g, g_layout.registerBtn, L"Register PNG", t, false, g_state.registered, g_hover == Hit::Register);
+    DrawButton(g, g_layout.registerBtn, L"Register formats", t, false, false, g_hover == Hit::Register);
     DrawButton(g, g_layout.unregisterBtn, L"Unregister", t, false, !g_state.registered, g_hover == Hit::Unregister);
     g.FillRectangle(&stroke, RectFOf(RectDip(Dip(g_layout.saveBtn.left) - 15, y + 17, 1, 24)));
     DrawButton(g, g_layout.saveBtn, L"Save", t, true, false, g_hover == Hit::Save);
@@ -1591,20 +1603,20 @@ void ActivateHit(HWND window, Hit hit)
             nullptr, nullptr, SW_SHOWNORMAL);
         break;
     case Hit::Register:
-        if (!g_state.registered) {
+        {
             const bool ok = RunRegsvr(window, false);
-            g_state.registered = IsPngHandlerRegistered();
-            OpenDialog(window, ok ? L"Registered PNG handler" : L"Registration failed",
-                ok ? L"Backdropper is now the per-user Shell thumbnail handler for .png. Transparent pixels will render over your chosen background."
+            g_state.registered = IsBackdropperHandlerRegistered();
+            OpenDialog(window, ok ? L"Registered image handlers" : L"Registration failed",
+                ok ? L"Backdropper is now the per-user Shell thumbnail handler for requested formats that have an installed WIC decoder."
                    : L"regsvr32 could not register BackdropperThumb.dll.");
         }
         break;
     case Hit::Unregister:
         if (g_state.registered) {
             const bool ok = RunRegsvr(window, true);
-            g_state.registered = IsPngHandlerRegistered();
-            OpenDialog(window, ok ? L"Unregistered PNG handler" : L"Unregister failed",
-                ok ? L"The handler was removed, the previous .png thumbnail handler restored, and the thumbnail cache cleared."
+            g_state.registered = IsBackdropperHandlerRegistered();
+            OpenDialog(window, ok ? L"Unregistered image handlers" : L"Unregister failed",
+                ok ? L"The handlers were removed, previous thumbnail handlers were restored, and the thumbnail cache was cleared."
                    : L"regsvr32 could not unregister BackdropperThumb.dll.");
         }
         break;
@@ -1648,7 +1660,7 @@ void LoadInitialState()
     wchar_t size[16] = {};
     swprintf_s(size, L"%u", g_state.settings.checkerSize);
     g_state.sizeText = size;
-    g_state.registered = IsPngHandlerRegistered();
+    g_state.registered = IsBackdropperHandlerRegistered();
 }
 
 LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam)

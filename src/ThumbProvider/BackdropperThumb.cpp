@@ -5,7 +5,12 @@
 #include <shlwapi.h>
 #include <strsafe.h>
 #include <thumbcache.h>
+#include <wincodec.h>
 #include <wrl/client.h>
+
+#include <array>
+#include <cwctype>
+#include <string>
 
 using Microsoft::WRL::ComPtr;
 
@@ -13,7 +18,10 @@ namespace {
 
 constexpr wchar_t kClsidString[] = L"{7F08B58C-8D1C-44D3-9A73-AB554FF53B1D}";
 constexpr wchar_t kThumbHandlerKey[] = L"{E357FCCD-A995-4576-B01F-234630154E96}";
-constexpr wchar_t kExtension[] = L".png";
+constexpr std::array<const wchar_t*, 12> kExtensions = {
+    L".png", L".webp", L".gif", L".ico", L".svg", L".psd",
+    L".ai", L".eps", L".pdf", L".avif", L".tga", L".dds",
+};
 
 const CLSID CLSID_BackdropperThumb = {
     0x7f08b58c, 0x8d1c, 0x44d3, {0x9a, 0x73, 0xab, 0x55, 0x4f, 0xf5, 0x3b, 0x1d}
@@ -34,14 +42,14 @@ std::wstring ModulePath()
     return path;
 }
 
-std::wstring ExtensionHandlerPath()
+std::wstring ExtensionHandlerPath(const wchar_t* extension)
 {
-    return std::wstring(L"Software\\Classes\\") + kExtension + L"\\shellex\\" + kThumbHandlerKey;
+    return std::wstring(L"Software\\Classes\\") + extension + L"\\shellex\\" + kThumbHandlerKey;
 }
 
-std::wstring BackupPath()
+std::wstring BackupPath(const wchar_t* extension)
 {
-    return std::wstring(L"Software\\Backdropper\\Backup\\") + kExtension;
+    return std::wstring(L"Software\\Backdropper\\Backup\\") + extension;
 }
 
 HRESULT SetStringValue(HKEY root, const std::wstring& path, const wchar_t* name, const std::wstring& value)
@@ -78,21 +86,89 @@ bool ReadStringValue(HKEY root, const std::wstring& path, const wchar_t* name, s
     return true;
 }
 
-void SavePreviousHandler()
+std::wstring Lower(std::wstring value)
+{
+    for (wchar_t& ch : value) {
+        ch = static_cast<wchar_t>(std::towlower(ch));
+    }
+    return value;
+}
+
+bool ExtensionListContains(const std::wstring& extensions, const wchar_t* extension)
+{
+    const std::wstring wanted = Lower(extension);
+    std::wstring token;
+    for (const wchar_t ch : extensions + L",") {
+        if (ch == L',' || ch == L';' || iswspace(ch)) {
+            if (Lower(token) == wanted) {
+                return true;
+            }
+            token.clear();
+        } else {
+            token.push_back(ch);
+        }
+    }
+    return false;
+}
+
+bool WicSupportsExtension(const wchar_t* extension)
+{
+    const HRESULT init = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    const bool uninitialize = init == S_OK || init == S_FALSE;
+    if (FAILED(init) && init != RPC_E_CHANGED_MODE) {
+        return wcscmp(extension, L".png") == 0;
+    }
+
+    ComPtr<IWICImagingFactory> factory;
+    HRESULT hr = CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&factory));
+    if (FAILED(hr)) {
+        if (uninitialize) {
+            CoUninitialize();
+        }
+        return wcscmp(extension, L".png") == 0;
+    }
+
+    ComPtr<IEnumUnknown> decoders;
+    hr = factory->CreateComponentEnumerator(WICDecoder, WICComponentEnumerateDefault, &decoders);
+    bool supported = false;
+    if (SUCCEEDED(hr)) {
+        ComPtr<IUnknown> unknown;
+        while (!supported && decoders->Next(1, &unknown, nullptr) == S_OK) {
+            ComPtr<IWICBitmapCodecInfo> info;
+            if (SUCCEEDED(unknown.As(&info))) {
+                UINT length = 0;
+                if (SUCCEEDED(info->GetFileExtensions(0, nullptr, &length)) && length > 0) {
+                    std::wstring list(length, L'\0');
+                    if (SUCCEEDED(info->GetFileExtensions(length, list.data(), &length))) {
+                        supported = ExtensionListContains(list, extension);
+                    }
+                }
+            }
+            unknown.Reset();
+        }
+    }
+
+    if (uninitialize) {
+        CoUninitialize();
+    }
+    return supported;
+}
+
+void SavePreviousHandler(const wchar_t* extension)
 {
     HKEY backup = nullptr;
-    if (RegOpenKeyExW(HKEY_CURRENT_USER, BackupPath().c_str(), 0, KEY_READ, &backup) == ERROR_SUCCESS) {
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, BackupPath(extension).c_str(), 0, KEY_READ, &backup) == ERROR_SUCCESS) {
         RegCloseKey(backup);
         return;
     }
 
     HKEY key = nullptr;
-    if (RegCreateKeyExW(HKEY_CURRENT_USER, BackupPath().c_str(), 0, nullptr, 0, KEY_WRITE, nullptr, &key, nullptr) != ERROR_SUCCESS) {
+    if (RegCreateKeyExW(HKEY_CURRENT_USER, BackupPath(extension).c_str(), 0, nullptr, 0, KEY_WRITE, nullptr, &key, nullptr) != ERROR_SUCCESS) {
         return;
     }
 
     std::wstring previous;
-    const DWORD hadValue = ReadStringValue(HKEY_CURRENT_USER, ExtensionHandlerPath(), nullptr, &previous) ? 1 : 0;
+    const DWORD hadValue = ReadStringValue(HKEY_CURRENT_USER, ExtensionHandlerPath(extension), nullptr, &previous) ? 1 : 0;
     RegSetValueExW(key, L"HadValue", 0, REG_DWORD, reinterpret_cast<const BYTE*>(&hadValue), sizeof(hadValue));
     if (hadValue) {
         RegSetValueExW(key, L"Value", 0, REG_SZ, reinterpret_cast<const BYTE*>(previous.c_str()),
@@ -101,20 +177,20 @@ void SavePreviousHandler()
     RegCloseKey(key);
 }
 
-void RestorePreviousHandler()
+void RestorePreviousHandler(const wchar_t* extension)
 {
     DWORD hadValue = 0;
     DWORD bytes = sizeof(hadValue);
-    RegGetValueW(HKEY_CURRENT_USER, BackupPath().c_str(), L"HadValue", RRF_RT_REG_DWORD, nullptr, &hadValue, &bytes);
+    RegGetValueW(HKEY_CURRENT_USER, BackupPath(extension).c_str(), L"HadValue", RRF_RT_REG_DWORD, nullptr, &hadValue, &bytes);
 
     std::wstring previous;
-    if (hadValue && ReadStringValue(HKEY_CURRENT_USER, BackupPath(), L"Value", &previous)) {
-        SetStringValue(HKEY_CURRENT_USER, ExtensionHandlerPath(), nullptr, previous);
+    if (hadValue && ReadStringValue(HKEY_CURRENT_USER, BackupPath(extension), L"Value", &previous)) {
+        SetStringValue(HKEY_CURRENT_USER, ExtensionHandlerPath(extension), nullptr, previous);
     } else {
-        SHDeleteKeyW(HKEY_CURRENT_USER, ExtensionHandlerPath().c_str());
+        SHDeleteKeyW(HKEY_CURRENT_USER, ExtensionHandlerPath(extension).c_str());
     }
 
-    SHDeleteKeyW(HKEY_CURRENT_USER, BackupPath().c_str());
+    SHDeleteKeyW(HKEY_CURRENT_USER, BackupPath(extension).c_str());
 }
 
 HRESULT RegisterServer()
@@ -122,7 +198,7 @@ HRESULT RegisterServer()
     const std::wstring clsidPath = std::wstring(L"Software\\Classes\\CLSID\\") + kClsidString;
     const std::wstring inprocPath = clsidPath + L"\\InprocServer32";
 
-    HRESULT hr = SetStringValue(HKEY_CURRENT_USER, clsidPath, nullptr, L"Backdropper PNG Thumbnail Provider");
+    HRESULT hr = SetStringValue(HKEY_CURRENT_USER, clsidPath, nullptr, L"Backdropper Image Thumbnail Provider");
     if (FAILED(hr)) {
         return hr;
     }
@@ -137,17 +213,31 @@ HRESULT RegisterServer()
         return hr;
     }
 
-    SavePreviousHandler();
-    hr = SetStringValue(HKEY_CURRENT_USER, ExtensionHandlerPath(), nullptr, kClsidString);
-    if (SUCCEEDED(hr)) {
+    bool registeredAny = false;
+    for (const wchar_t* extension : kExtensions) {
+        if (!WicSupportsExtension(extension)) {
+            continue;
+        }
+
+        SavePreviousHandler(extension);
+        hr = SetStringValue(HKEY_CURRENT_USER, ExtensionHandlerPath(extension), nullptr, kClsidString);
+        if (FAILED(hr)) {
+            return hr;
+        }
+        registeredAny = true;
+    }
+
+    if (registeredAny) {
         SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, nullptr, nullptr);
     }
-    return hr;
+    return S_OK;
 }
 
 HRESULT UnregisterServer()
 {
-    RestorePreviousHandler();
+    for (const wchar_t* extension : kExtensions) {
+        RestorePreviousHandler(extension);
+    }
     const std::wstring clsidPath = std::wstring(L"Software\\Classes\\CLSID\\") + kClsidString;
     SHDeleteKeyW(HKEY_CURRENT_USER, clsidPath.c_str());
     ForceDeleteThumbcacheDbs();

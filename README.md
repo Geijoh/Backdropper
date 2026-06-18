@@ -2,7 +2,11 @@
 
 Native Windows thumbnail utility for transparent images.
 
-Current build: PNG thumbnail handler only. It composites transparent PNG thumbnails over a solid/checker/none background in Explorer.
+Current build: WIC-backed thumbnail handler for transparent image-like assets. It composites transparent thumbnails over a solid/checker/none background in Explorer.
+
+Registered extensions: `.png`, `.webp`, `.gif`, `.ico`, `.svg`, `.psd`, `.ai`, `.eps`, `.pdf`, `.avif`, `.tga`, `.dds`.
+
+Backdropper only registers formats that have an installed Windows Imaging Component decoder, so unsupported formats keep their existing Explorer behavior.
 
 [Download latest build](https://github.com/Geijoh/Backdropper/releases/latest)
 
@@ -60,4 +64,4 @@ Open `build\bin\BackdropperSettings.exe` to change background settings or unregi
 .\tools\unregister-dev.ps1
 ```
 
-SVG is intentionally not registered yet. PNG proves the shell-extension path first.
+SVG, PSD, AI, EPS, PDF, AVIF, TGA, DDS, and WebP support depends on installed WIC codecs. The built-in handler skips formats Windows cannot decode.
