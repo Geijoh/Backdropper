@@ -26,7 +26,7 @@ add_library(BackdropperThumb SHARED
   src/common/settings.cpp
   src/common/thumbnail_cache.cpp
 )
-target_compile_definitions(BackdropperThumb PRIVATE UNICODE _UNICODE NOMINMAX)
+target_compile_definitions(BackdropperThumb PRIVATE UNICODE _UNICODE NOMINMAX _SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS)
 target_include_directories(BackdropperThumb PRIVATE src/common)
 target_link_libraries(BackdropperThumb PRIVATE windowscodecs shlwapi shell32 shcore ole32 runtimeobject gdi32 d2d1 d3d11 dxgi windowsapp)
 
@@ -49,6 +49,6 @@ add_executable(RenderSmoke
   src/RenderSmoke/RenderSmoke.cpp
   src/common/render.cpp
 )
-target_compile_definitions(RenderSmoke PRIVATE UNICODE _UNICODE NOMINMAX)
+target_compile_definitions(RenderSmoke PRIVATE UNICODE _UNICODE NOMINMAX _SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS)
 target_include_directories(RenderSmoke PRIVATE src/common)
 target_link_libraries(RenderSmoke PRIVATE windowscodecs ole32 shell32 shlwapi shcore runtimeobject gdi32 d2d1 d3d11 dxgi windowsapp)
