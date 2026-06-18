@@ -236,6 +236,10 @@ std::wstring EffectiveProgIdForExtension(const wchar_t* extension)
 
 bool CanRegisterExtension(const wchar_t* extension)
 {
+    if (wcscmp(extension, L".png") == 0) {
+        // ponytail: PNG is the primary feature; register it even if WIC enumeration is incomplete.
+        return true;
+    }
     if (wcscmp(extension, L".eps") == 0) {
         // ponytail: Ghostscript is optional; don't steal EPS thumbnails when it is not installed.
         return HasGhostscript();

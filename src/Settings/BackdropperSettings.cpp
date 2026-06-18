@@ -584,12 +584,7 @@ bool IsBackdropperHandlerRegistered()
         return false;
     }
 
-    for (const wchar_t* extension : kExtensions) {
-        if (EffectiveHandlerIsBackdropper(extension)) {
-            return true;
-        }
-    }
-    return false;
+    return EffectiveHandlerIsBackdropper(L".png");
 }
 
 void OpenDialog(HWND window, const std::wstring& title, const std::wstring& body)
