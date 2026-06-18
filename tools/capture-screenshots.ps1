@@ -155,7 +155,7 @@ try {
     [ScreenshotWin32]::ClientClick($hwnd, [int]($width * 959 / 1060), [int]($height * 118 / 692))
     Start-Sleep -Milliseconds 200
 
-    [ScreenshotWin32]::ClientClick($hwnd, [int]($width * 675 / 1060), [int]($height * 663 / 692))
+    [ScreenshotWin32]::ClientClick($hwnd, [int]($width * 800 / 1060), [int]($height * 20 / 692))
     Start-Sleep -Milliseconds 300
 
     [ScreenshotWin32]::SaveWindowPng($hwnd, (Join-Path $OutDir "settings-about.png"))

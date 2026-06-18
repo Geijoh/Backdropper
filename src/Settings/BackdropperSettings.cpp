@@ -475,7 +475,8 @@ void CalculateLayout(HWND window)
     g_layout.maximize = RectDip(w - capW * 2, 0, capW, 40);
     g_layout.minimize = RectDip(w - capW * 3, 0, capW, 40);
     g_layout.theme = RectDip(w - capW * 3 - 8 - 74, 6, 74, 28);
-    g_layout.matchSystem = RectDip(Dip(g_layout.theme.left) - 8 - 152, 6, 152, 28);
+    g_layout.aboutBtn = RectDip(Dip(g_layout.theme.left) - 8 - 78, 6, 78, 28);
+    g_layout.matchSystem = RectDip(Dip(g_layout.aboutBtn.left) - 8 - 152, 6, 152, 28);
 
     g_layout.content = RectDip(0, 40, w, std::max(0.0, h - 98));
 
@@ -523,15 +524,12 @@ void CalculateLayout(HWND window)
     const double saveW = 70;
     const double unregW = 96;
     const double regW = 132;
-    const double aboutW = 36;
     const double saveX = w - 20 - saveW;
     const double unregX = saveX - 10 - 9 - 10 - unregW;
     const double regX = unregX - 10 - regW;
-    const double aboutX = regX - 10 - aboutW;
     g_layout.saveBtn = RectDip(saveX, footerY + 13, saveW, 32);
     g_layout.unregisterBtn = RectDip(unregX, footerY + 13, unregW, 32);
     g_layout.registerBtn = RectDip(regX, footerY + 13, regW, 32);
-    g_layout.aboutBtn = RectDip(aboutX, footerY + 13, aboutW, 32);
 
     const double rightX = leftW;
     const double rightW = w - leftW;
@@ -1314,6 +1312,14 @@ void DrawTitlebar(Graphics& g, const RECT& client, const Theme& t)
     DrawSwitch(g, RectDip(Dip(g_layout.matchSystem.right) - 50, Dip(g_layout.matchSystem.top) + 4, 40, 20),
         g_state.matchSystemTheme, t);
 
+    DrawRoundedBorder(g, g_layout.aboutBtn, 5,
+        g_hover == Hit::About ? hoverFill : Color(0, 0, 0, 0),
+        t.ctrlBorder);
+    DrawInfoIcon(g, RectDip(Dip(g_layout.aboutBtn.left) + 10, Dip(g_layout.aboutBtn.top) + 5, 18, 18), t);
+    DrawTextBlock(g, L"About",
+        RectDip(Dip(g_layout.aboutBtn.left) + 31, Dip(g_layout.aboutBtn.top), 38, 28),
+        12, t.fg2, FontStyleRegular, StringAlignmentNear, StringAlignmentCenter);
+
     if (g_state.matchSystemTheme) {
         DrawRounded(g, g_layout.theme, 5, Color(0, 0, 0, 0));
     } else {
@@ -1434,10 +1440,6 @@ void DrawFooter(Graphics& g, const RECT& client, const Theme& t)
     g.FillEllipse(&dot, RectFOf(RectDip(20, y + 25, 8, 8)));
     DrawTextBlock(g, RegistrationText(), RectDip(38, y + 19, 420, 20), 12.5f, t.fg2);
 
-    DrawRoundedBorder(g, g_layout.aboutBtn, 5,
-        g_hover == Hit::About ? (EffectiveDark() ? Rgba(255, 255, 255, 20) : Rgba(0, 0, 0, 10)) : t.ctrl,
-        t.ctrlBorder);
-    DrawInfoIcon(g, g_layout.aboutBtn, t);
     DrawButton(g, g_layout.registerBtn, L"Register formats", t, false, false, g_hover == Hit::Register);
     DrawButton(g, g_layout.unregisterBtn, L"Unregister", t, false, !g_state.registered, g_hover == Hit::Unregister);
     g.FillRectangle(&stroke, RectFOf(RectDip(Dip(g_layout.saveBtn.left) - 15, y + 17, 1, 24)));
