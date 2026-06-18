@@ -8,7 +8,7 @@ Supported/targeted extensions: `.png`, `.webp`, `.gif`, `.ico`, `.svg`, `.psd`, 
 
 Backdropper registers SVG, PDF, PDF-compatible AI, PSD, and TGA through built-in fallback renderers. EPS/PostScript AI register when Ghostscript is installed. Other formats are registered only when Windows has an installed Windows Imaging Component decoder, so unsupported formats keep their existing Explorer behavior.
 
-[Download latest build](https://github.com/Geijoh/Backdropper/releases/latest) · [Privacy policy](PRIVACY.md)
+[Download latest build](https://github.com/Geijoh/Backdropper/releases/latest) | [Privacy policy](PRIVACY.md)
 
 ## System Requirements
 
@@ -68,3 +68,7 @@ Open `build\bin\BackdropperSettings.exe` to change background settings or unregi
 ```
 
 SVG and PDF render through native Windows APIs. PDF-compatible AI uses the same PDF renderer. PSD and TGA have built-in flattened-thumbnail fallback support. EPS and older PostScript-style AI use Ghostscript when installed. AVIF, DDS, and WebP support depends on installed WIC codecs.
+
+## Development Note
+
+Backdropper was designed and built with AI-assisted development tools, including Claude Code, Codex, and Claude Design, under maintainer review and direction. The shipped code, packaging, and releases are maintained by Chris Johnson.
