@@ -152,7 +152,7 @@ function Wait-BackdropperWindow($process) {
 
 function Set-DemoSettings {
     $path = "HKCU:\Software\Backdropper"
-    $names = @("Mode", "SolidColor", "CheckerColorA", "CheckerColorB", "CheckerSize", "DeleteThumbnailDbsOnSave")
+    $names = @("Mode", "SolidColor", "CheckerColorA", "CheckerColorB", "CheckerSize", "DeleteThumbnailDbsOnSave", "CheckUpdatesAutomatically")
     $snapshot = @{
         existed = Test-Path -LiteralPath $path
         values = @{}
@@ -160,7 +160,11 @@ function Set-DemoSettings {
 
     if ($snapshot.existed) {
         foreach ($name in $names) {
-            $snapshot.values[$name] = Get-ItemPropertyValue -LiteralPath $path -Name $name -ErrorAction SilentlyContinue
+            try {
+                $snapshot.values[$name] = Get-ItemPropertyValue -LiteralPath $path -Name $name -ErrorAction Stop
+            } catch {
+                $snapshot.values[$name] = $null
+            }
         }
     }
 
@@ -172,6 +176,7 @@ function Set-DemoSettings {
     New-ItemProperty -LiteralPath $path -Name CheckerColorB -PropertyType String -Value "#E5E7EB" -Force | Out-Null
     New-ItemProperty -LiteralPath $path -Name CheckerSize -PropertyType DWord -Value 16 -Force | Out-Null
     New-ItemProperty -LiteralPath $path -Name DeleteThumbnailDbsOnSave -PropertyType DWord -Value 1 -Force | Out-Null
+    New-ItemProperty -LiteralPath $path -Name CheckUpdatesAutomatically -PropertyType DWord -Value 1 -Force | Out-Null
 
     return $snapshot
 }
@@ -184,7 +189,7 @@ function Restore-Settings($snapshot) {
     }
 
     New-Item -Path $path -Force | Out-Null
-    foreach ($name in @("Mode", "SolidColor", "CheckerColorA", "CheckerColorB", "CheckerSize", "DeleteThumbnailDbsOnSave")) {
+    foreach ($name in @("Mode", "SolidColor", "CheckerColorA", "CheckerColorB", "CheckerSize", "DeleteThumbnailDbsOnSave", "CheckUpdatesAutomatically")) {
         $value = $snapshot.values[$name]
         if ($null -eq $value) {
             Remove-ItemProperty -LiteralPath $path -Name $name -ErrorAction SilentlyContinue
@@ -233,6 +238,11 @@ try {
     Start-Sleep -Milliseconds 300
 
     [ScreenshotWin32]::SaveWindowPng($hwnd, (Join-Path $OutDir "settings-about.png"))
+
+    [ScreenshotWin32]::ClientClick($hwnd, [int]($width * 617 / 1060), [int]($height * 499 / 692))
+    Start-Sleep -Milliseconds 300
+
+    [ScreenshotWin32]::SaveWindowPng($hwnd, (Join-Path $OutDir "settings-privacy.png"))
 } finally {
     if ($app -and -not $app.HasExited) {
         $app.CloseMainWindow() | Out-Null

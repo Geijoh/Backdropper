@@ -84,6 +84,7 @@ BackdropperSettings LoadBackdropperSettings()
     ParseColor(ReadString(key, L"CheckerColorB", L"#C8C8C8").c_str(), &settings.checkerB);
     settings.checkerSize = std::max(1u, std::min(64u, static_cast<UINT>(ReadDword(key, L"CheckerSize", 8))));
     settings.deleteThumbnailDbsOnSave = ReadDword(key, L"DeleteThumbnailDbsOnSave", 1) != 0;
+    settings.checkUpdatesAutomatically = ReadDword(key, L"CheckUpdatesAutomatically", 1) != 0;
     for (size_t i = 0; i < kBackdropperFormats.size(); ++i) {
         const std::wstring name = FormatEnabledName(kBackdropperFormats[i]);
         settings.enabledFormats[i] = ReadDword(key, name.c_str(), 1) != 0;
@@ -107,6 +108,7 @@ HRESULT SaveBackdropperSettings(const BackdropperSettings& settings)
     WriteString(key, L"CheckerColorB", FormatColor(settings.checkerB));
     WriteDword(key, L"CheckerSize", std::max(1u, std::min(64u, settings.checkerSize)));
     WriteDword(key, L"DeleteThumbnailDbsOnSave", settings.deleteThumbnailDbsOnSave ? 1 : 0);
+    WriteDword(key, L"CheckUpdatesAutomatically", settings.checkUpdatesAutomatically ? 1 : 0);
     for (size_t i = 0; i < kBackdropperFormats.size(); ++i) {
         const std::wstring name = FormatEnabledName(kBackdropperFormats[i]);
         WriteDword(key, name.c_str(), settings.enabledFormats[i] ? 1 : 0);

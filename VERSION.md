@@ -1,6 +1,6 @@
 # Backdropper Version
 
-Current version: 0.6.6
+Current version: 0.6.7
 
 ## Versioning
 

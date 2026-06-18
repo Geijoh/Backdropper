@@ -45,6 +45,8 @@ Build:
 
 ![Backdropper about dialog](assets/screenshots/settings-about.png)
 
+![Backdropper privacy policy dialog](assets/screenshots/settings-privacy.png)
+
 Refresh screenshots:
 
 ```powershell

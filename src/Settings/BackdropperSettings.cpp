@@ -63,6 +63,7 @@ enum class Hit {
     SizeDown,
     SizeUp,
     RestartToggle,
+    AutoCheckToggle,
     CheckUpdates,
     InstallUpdate,
     ViewButton,
@@ -113,6 +114,11 @@ enum class ViewMode {
 constexpr std::array<ViewMode, 7> kViewMenuOrder = {
     ViewMode::ExtraLarge, ViewMode::Large, ViewMode::Medium, ViewMode::Small,
     ViewMode::List, ViewMode::Details, ViewMode::Tiles
+};
+
+constexpr std::array<size_t, kBackdropperFormatCount> kFormatsDialogOrder = {
+    0, 2, 4, 6, 8, 10,
+    1, 3, 5, 7, 9, 11,
 };
 static_assert(static_cast<int>(Hit::FormatDds) - static_cast<int>(Hit::FormatPng) + 1 == static_cast<int>(kBackdropperFormatCount));
 static_assert(static_cast<int>(Hit::MenuTiles) - static_cast<int>(Hit::MenuExtraLarge) + 1 == static_cast<int>(kViewMenuOrder.size()));
@@ -184,6 +190,7 @@ struct Layout {
     RECT sizeDown {};
     RECT sizeUp {};
     RECT restartToggle {};
+    RECT autoCheckToggle {};
     RECT formatManageBtn {};
     std::array<RECT, kBackdropperFormatCount> formatToggles {};
     RECT formatsDialog {};
@@ -212,6 +219,7 @@ struct Layout {
     RECT leftPane {};
     RECT rightPane {};
     RECT previewFrame {};
+    RECT leftScrollbarThumb {};
 };
 
 struct AppState {
@@ -237,6 +245,8 @@ struct AppState {
     std::array<bool, kBackdropperFormatCount> formatAvailable {};
     double privacyScroll = 0;
     double privacyContentHeight = 0;
+    double leftScroll = 0;
+    double leftContentHeight = 0;
     std::wstring privacyMarkdown;
     bool syncingEdits = false;
 };
@@ -331,30 +341,35 @@ bool EffectiveDark()
     return g_state.matchSystemTheme ? SystemUsesDarkTheme() : g_state.dark;
 }
 
+COLORREF SolidControlRef()
+{
+    return EffectiveDark() ? RGB(50, 50, 50) : RGB(247, 247, 247);
+}
+
 Theme CurrentTheme()
 {
     if (EffectiveDark()) {
         return {
             Rgba(32, 32, 32),
-            Rgba(255, 255, 255, 26),
+            Rgba(255, 255, 255, 38),
             Rgba(43, 43, 43),
             Rgba(255, 255, 255, 22),
             Rgba(255, 255, 255),
             Rgba(255, 255, 255, 158),
             Rgba(43, 43, 43),
-            Rgba(255, 255, 255, 18),
+            Rgba(255, 255, 255, 22),
             Rgba(50, 50, 50),
-            Rgba(255, 255, 255, 26),
-            Rgba(255, 255, 255, 41),
+            Rgba(255, 255, 255, 38),
+            Rgba(255, 255, 255, 38),
             Rgba(43, 43, 43),
             Rgba(43, 43, 43),
-            Rgba(255, 255, 255, 26),
-            Rgba(39, 39, 39),
+            Rgba(255, 255, 255, 38),
+            Rgba(33, 33, 33),
             Rgba(32, 32, 32),
             Rgba(43, 43, 43),
             Rgba(43, 43, 43),
-            Rgba(255, 255, 255, 15),
-            Rgba(255, 255, 255, 140),
+            Rgba(255, 255, 255, 26),
+            Rgba(255, 255, 255, 115),
             Rgba(0, 120, 212),
             Rgba(255, 255, 255),
         };
@@ -362,24 +377,24 @@ Theme CurrentTheme()
 
     return {
         Rgba(243, 243, 243),
-        Rgba(0, 0, 0, 26),
+        Rgba(0, 0, 0, 33),
         Rgba(238, 240, 244),
-        Rgba(0, 0, 0, 20),
+        Rgba(0, 0, 0, 18),
         Rgba(26, 26, 26),
         Rgba(0, 0, 0, 153),
         Rgba(255, 255, 255),
-        Rgba(221, 217, 210),
-        Rgba(255, 255, 255),
-        Rgba(0, 0, 0, 20),
-        Rgba(0, 0, 0, 41),
+        Rgba(0, 0, 0, 18),
+        Rgba(0, 0, 0, 8),
+        Rgba(0, 0, 0, 33),
+        Rgba(0, 0, 0, 33),
         Rgba(250, 250, 250),
-        Rgba(251, 251, 251),
-        Rgba(0, 0, 0, 26),
-        Rgba(237, 238, 241),
+        Rgba(255, 255, 255),
+        Rgba(0, 0, 0, 33),
+        Rgba(234, 235, 238),
         Rgba(255, 255, 255),
         Rgba(247, 248, 250),
-        Rgba(251, 251, 251),
-        Rgba(0, 0, 0, 12),
+        Rgba(255, 255, 255),
+        Rgba(0, 0, 0, 15),
         Rgba(0, 0, 0, 115),
         Rgba(0, 120, 212),
         Rgba(255, 255, 255),
@@ -615,7 +630,7 @@ std::wstring FormatStatus(size_t index)
         return g_state.ghostscriptInstalled ? L"Ghostscript" : L"Needs Ghostscript";
     }
     if (wcscmp(extension, L".ai") == 0) {
-        return g_state.ghostscriptInstalled ? L"PDF + legacy" : L"PDF only";
+        return g_state.ghostscriptInstalled ? L"PDF + legacy" : L"PDF-based only";
     }
     if (BackdropperHasBuiltInRenderer(extension)) {
         return L"Built in";
@@ -662,6 +677,7 @@ RECT HoverRect(Hit hit)
     case Hit::SizeDown: return g_layout.sizeDown;
     case Hit::SizeUp: return g_layout.sizeUp;
     case Hit::RestartToggle: return g_layout.restartToggle;
+    case Hit::AutoCheckToggle: return g_layout.autoCheckToggle;
     case Hit::CheckUpdates: return g_layout.checkUpdatesBtn;
     case Hit::InstallUpdate: return g_layout.installUpdateBtn;
     case Hit::ViewButton: return g_layout.viewButton;
@@ -860,8 +876,7 @@ void UpdateEditBrush()
     if (g_editBrush) {
         DeleteObject(g_editBrush);
     }
-    const Theme t = CurrentTheme();
-    g_editBrush = CreateSolidBrush(SolidColorRef(t.ctrl, EffectiveDark() ? RGB(47, 47, 47) : RGB(255, 255, 255)));
+    g_editBrush = CreateSolidBrush(SolidControlRef());
 }
 
 void ApplyDpi(HWND window, UINT dpi)
@@ -925,7 +940,26 @@ void CalculateLayout(HWND window)
 
     const double cardX = 22;
     const double cardW = leftW - 44;
-    double cardY = 116;
+    constexpr double bgCardY = 116;
+    double bgCardH = 128;
+    if (g_state.settings.mode == BackdropMode::Solid) {
+        bgCardH = 146;
+    } else if (g_state.settings.mode == BackdropMode::Checker) {
+        bgCardH = 232;
+    }
+
+    const double formatsYBase = bgCardY + bgCardH + 14;
+    const double cacheYBase = formatsYBase + 88;
+    const double registrationYBase = cacheYBase + 88;
+    const double updateYBase = registrationYBase + 88;
+    constexpr double updateCardH = 150;
+    const double leftViewportH = Dip(g_layout.leftPane.bottom - g_layout.leftPane.top);
+    g_state.leftContentHeight = updateYBase + updateCardH + 26 - 40;
+    const double leftMaxScroll = std::max(0.0, g_state.leftContentHeight - leftViewportH);
+    g_state.leftScroll = std::max(0.0, std::min(leftMaxScroll, g_state.leftScroll));
+
+    const double scroll = g_state.leftScroll;
+    double cardY = bgCardY - scroll;
     g_layout.segNone = RectDip(cardX + 21, cardY + 49, 65, 30);
     g_layout.segSolid = RectDip(cardX + 88, cardY + 49, 65, 30);
     g_layout.segChecker = RectDip(cardX + 155, cardY + 49, 84, 30);
@@ -957,26 +991,37 @@ void CalculateLayout(HWND window)
     }
 
     const double formatsY = cardY + 14;
-    g_layout.formatManageBtn = RectDip(cardX + cardW - 19 - 78, formatsY + 28, 78, 30);
+    g_layout.formatManageBtn = RectDip(cardX + cardW - 19 - 78, formatsY + 21, 78, 32);
 
     const double cacheY = formatsY + 88;
     g_layout.restartToggle = RectDip(cardX + cardW - 19 - 40, cacheY + 27, 40, 20);
-    const double updateY = cacheY + 88;
-    g_layout.checkUpdatesBtn = RectDip(cardX + cardW - 19 - 70, updateY + 40, 70, 30);
+    const double registrationY = cacheY + 88;
+    const double updateY = registrationY + 88;
+    g_layout.autoCheckToggle = RectDip(cardX + cardW - 19 - 40, updateY + 72, 40, 20);
+    g_layout.checkUpdatesBtn = RectDip(cardX + 19, updateY + 101, 96, 32);
     if (UpdateButtonVisible()) {
         const double installW = ForceUpdateVisible() ? 100 : 70;
-        g_layout.installUpdateBtn = RectDip(cardX + cardW - 19 - installW, updateY + 10, installW, 30);
+        g_layout.installUpdateBtn = RectDip(cardX + 19 + 96 + 9, updateY + 101, installW, 32);
     } else {
         g_layout.installUpdateBtn = {};
+    }
+
+    if (leftMaxScroll > 0) {
+        const double trackTop = Dip(g_layout.leftPane.top) + 58;
+        const double trackBottom = Dip(g_layout.leftPane.bottom) - 10;
+        const double trackH = std::max(42.0, trackBottom - trackTop);
+        const double thumbH = std::max(42.0, trackH * leftViewportH / g_state.leftContentHeight);
+        const double thumbY = trackTop + (trackH - thumbH) * g_state.leftScroll / leftMaxScroll;
+        g_layout.leftScrollbarThumb = RectDip(leftW - 12, thumbY, 8, thumbH);
     }
 
     const double footerY = h - 58;
     const double saveW = 70;
     const double unregW = 96;
-    const double regW = 132;
+    const double regW = 90;
     const double saveX = w - 20 - saveW;
-    const double unregX = saveX - 10 - 9 - 10 - unregW;
-    const double regX = unregX - 10 - regW;
+    const double unregX = saveX - 9 - unregW;
+    const double regX = unregX - 9 - regW;
     g_layout.saveBtn = RectDip(saveX, footerY + 13, saveW, 32);
     g_layout.unregisterBtn = RectDip(unregX, footerY + 13, unregW, 32);
     g_layout.registerBtn = RectDip(regX, footerY + 13, regW, 32);
@@ -995,42 +1040,45 @@ void CalculateLayout(HWND window)
 
     g_layout.dialogOk = RectDip((w - 292) / 2, (h - 204) / 2 + 148, 292, 34);
 
-    constexpr double aboutDialogW = 300;
-    constexpr double aboutDialogH = 216;
+    constexpr double aboutDialogW = 394;
+    constexpr double aboutDialogH = 374;
     const double aboutDialogX = (w - aboutDialogW) / 2;
     const double aboutDialogY = (h - aboutDialogH) / 2;
     g_layout.aboutDialog = RectDip(aboutDialogX, aboutDialogY, aboutDialogW, aboutDialogH);
-    g_layout.aboutClose = RectDip(aboutDialogX + 254, aboutDialogY + 12, 28, 28);
-    g_layout.aboutGithub = RectDip(aboutDialogX + 22, aboutDialogY + 160, 123.5, 34);
-    g_layout.aboutPrivacy = RectDip(aboutDialogX + 154.5, aboutDialogY + 160, 123.5, 34);
+    g_layout.aboutClose = RectDip(aboutDialogX + aboutDialogW - 48, aboutDialogY + 14, 34, 34);
+    g_layout.aboutGithub = RectDip(aboutDialogX + 29, aboutDialogY + 323, 162, 34);
+    g_layout.aboutPrivacy = RectDip(aboutDialogX + 203, aboutDialogY + 323, 162, 34);
 
-    const double privacyX = 22;
-    const double privacyY = 26;
-    const double privacyW = std::max(320.0, w - 44);
-    const double privacyH = std::max(320.0, h - 52);
+    const double privacyW = std::min(600.0, std::max(320.0, w - 60));
+    const double privacyH = std::min(632.0, std::max(320.0, h - 60));
+    const double privacyX = (w - privacyW) / 2;
+    const double privacyY = (h - privacyH) / 2;
     g_layout.privacyDialog = RectDip(privacyX, privacyY, privacyW, privacyH);
-    g_layout.privacyClose = RectDip(privacyX + privacyW - 68, privacyY + 32, 34, 34);
-    g_layout.privacyViewport = RectDip(privacyX + 42, privacyY + 132, privacyW - 92, privacyH - 152);
+    g_layout.privacyClose = RectDip(privacyX + privacyW - 58, privacyY + 15, 46, 40);
+    g_layout.privacyViewport = RectDip(privacyX + 26, privacyY + 92, privacyW - 52, privacyH - 120);
 
-    constexpr double formatsDialogW = 580;
+    constexpr double formatsDialogW = 560;
     constexpr double formatsDialogH = 492;
     const double formatsDialogX = (w - formatsDialogW) / 2;
     const double formatsDialogY = (h - formatsDialogH) / 2;
     g_layout.formatsDialog = RectDip(formatsDialogX, formatsDialogY, formatsDialogW, formatsDialogH);
-    g_layout.formatsClose = RectDip(formatsDialogX + formatsDialogW - 46, formatsDialogY + 14, 28, 28);
-    g_layout.formatsDone = RectDip(formatsDialogX + formatsDialogW - 102, formatsDialogY + formatsDialogH - 52, 80, 32);
-    const double colW = (formatsDialogW - 56) / 2;
-    for (size_t i = 0; i < kBackdropperFormatCount; ++i) {
-        const double col = static_cast<double>(i % 2);
-        const double row = static_cast<double>(i / 2);
-        g_layout.formatToggles[i] = RectDip(formatsDialogX + 22 + col * colW, formatsDialogY + 82 + row * 50, colW - 10, 42);
+    g_layout.formatsClose = RectDip(formatsDialogX + formatsDialogW - 62, formatsDialogY + 22, 46, 40);
+    g_layout.formatsDone = RectDip(formatsDialogX + formatsDialogW - 104, formatsDialogY + formatsDialogH - 47, 80, 32);
+    const double colW = (formatsDialogW - 48 - 14) / 2;
+    for (size_t position = 0; position < kFormatsDialogOrder.size(); ++position) {
+        const size_t i = kFormatsDialogOrder[position];
+        const double col = static_cast<double>(position % 2);
+        const double row = static_cast<double>(position / 2);
+        g_layout.formatToggles[i] = RectDip(formatsDialogX + 24 + col * (colW + 14), formatsDialogY + 109 + row * 51, colW, 42);
     }
-    g_layout.ghostscriptLink = RectDip(formatsDialogX + 228, formatsDialogY + formatsDialogH - 48, 150, 22);
+    g_layout.ghostscriptLink = RectDip(formatsDialogX + 52, formatsDialogY + formatsDialogH - 27, 150, 18);
 }
 
 void MoveEdit(HWND edit, const RECT& outer)
 {
-    if (IsEmptyRect(outer)) {
+    if (IsEmptyRect(outer)
+        || outer.top < g_layout.leftPane.top
+        || outer.bottom > g_layout.leftPane.bottom) {
         ShowWindow(edit, SW_HIDE);
         return;
     }
@@ -1450,12 +1498,12 @@ void DrawAppIcon(Graphics& g, double x, double y, double size, const Theme&)
 
 void DrawFolderIcon(Graphics& g, double x, double y)
 {
-    DrawFluentIcon(g, RectDip(x, y - 1, 20, 20), FluentIcon::Folder, Rgba(232, 178, 58));
+    DrawFluentIcon(g, RectDip(x, y, 15, 15), FluentIcon::Folder, Rgba(232, 178, 58));
 }
 
 void DrawGridIcon(Graphics& g, double x, double y, const Color& color)
 {
-    DrawFluentIcon(g, RectDip(x - 1, y - 2, 20, 20), FluentIcon::Grid, color);
+    DrawFluentIcon(g, RectDip(x, y - 1, 18, 18), FluentIcon::Grid, color);
 }
 
 void DrawThemeIcon(Graphics& g, const RECT& rect, const Theme& t)
@@ -1491,8 +1539,8 @@ void DrawButton(Graphics& g, const RECT& rect, const std::wstring& text, const T
 std::wstring RegistrationText()
 {
     return g_state.registered
-        ? L"Registered for supported image formats"
-        : L"Not registered \u2014 using default Windows handlers";
+        ? L"Registered as the thumbnail handler"
+        : L"Not registered \u2014 using the default Windows handler";
 }
 
 Color RegistrationDot(const Theme& t)
@@ -1599,7 +1647,7 @@ void DrawAboutActionButton(Graphics& g, const RECT& rect, const std::wstring& te
         hovered ? (EffectiveDark() ? Rgba(255, 255, 255, 20) : Rgba(0, 0, 0, 10)) : t.ctrl,
         t.ctrlBorder);
 
-    const double groupW = iconKind == AboutActionIcon::Privacy ? 78 : 88;
+    const double groupW = iconKind == AboutActionIcon::Privacy ? 122 : 88;
     const double iconSize = 18;
     const double x = Dip(rect.left) + (Dip(rect.right - rect.left) - groupW) / 2;
     const double y = Dip(rect.top) + (Dip(rect.bottom - rect.top) - iconSize) / 2;
@@ -1997,7 +2045,7 @@ void DrawTitlebar(Graphics& g, const RECT& client, const Theme& t)
     DrawRoundedBorder(g, g_layout.aboutBtn, 5,
         g_hover == Hit::About ? hoverFill : Color(0, 0, 0, 0),
         t.ctrlBorder);
-    DrawInfoIcon(g, RectDip(Dip(g_layout.aboutBtn.left) + 10, Dip(g_layout.aboutBtn.top) + 5, 18, 18), t);
+    DrawInfoIcon(g, RectDip(Dip(g_layout.aboutBtn.left) + 11, Dip(g_layout.aboutBtn.top) + 7, 14, 14), t);
     DrawTextBlock(g, L"About",
         RectDip(Dip(g_layout.aboutBtn.left) + 31, Dip(g_layout.aboutBtn.top), 38, 28),
         12, t.fg2, FontStyleRegular, StringAlignmentNear, StringAlignmentCenter);
@@ -2029,16 +2077,36 @@ void DrawTitlebar(Graphics& g, const RECT& client, const Theme& t)
     DrawFluentIcon(g, RectDip(Dip(g_layout.close.left) + 14, 10, 20, 20), FluentIcon::Dismiss, cap);
 }
 
+void DrawLeftScrollbar(Graphics& g, const Theme& t)
+{
+    if (IsEmptyRect(g_layout.leftScrollbarThumb)) {
+        return;
+    }
+
+    const Color scrollColor = EffectiveDark() ? Rgba(255, 255, 255, 115) : Rgba(0, 0, 0, 95);
+    const double leftW = Dip(g_layout.leftPane.right - g_layout.leftPane.left);
+    const double top = Dip(g_layout.leftPane.top) + 58;
+    const double bottom = Dip(g_layout.leftPane.bottom) - 10;
+    DrawFluentIcon(g, RectDip(leftW - 17, top - 19, 16, 16), FluentIcon::ChevronUp, scrollColor);
+    DrawRounded(g, g_layout.leftScrollbarThumb, 4, scrollColor);
+    DrawFluentIcon(g, RectDip(leftW - 17, bottom + 3, 16, 16), FluentIcon::ChevronDown, scrollColor);
+}
+
 void DrawLeftPane(Graphics& g, const Theme& t)
 {
     const double leftW = Dip(g_layout.leftPane.right - g_layout.leftPane.left);
     const double cardX = 22;
     const double cardW = leftW - 44;
+    const double scroll = g_state.leftScroll;
 
-    DrawTextBlock(g, L"Backdropper", RectDip(22, 61, 140, 28), 21, t.fg, FontStyleBold);
-    DrawTextBlock(g, L"Transparent image backgrounds", RectDip(22, 91, 280, 20), 13, t.fg2);
+    Region oldClip;
+    g.GetClip(&oldClip);
+    g.SetClip(RectFOf(g_layout.leftPane), CombineModeReplace);
 
-    double cardY = 116;
+    DrawTextBlock(g, L"Backdropper", RectDip(22, 61 - scroll, 140, 28), 21, t.fg, FontStyleBold);
+    DrawTextBlock(g, L"Transparent image backgrounds", RectDip(22, 91 - scroll, 280, 20), 13, t.fg2);
+
+    double cardY = 116 - scroll;
     double bgCardH = 128;
     if (g_state.settings.mode == BackdropMode::Solid) {
         bgCardH = 146;
@@ -2046,9 +2114,9 @@ void DrawLeftPane(Graphics& g, const Theme& t)
         bgCardH = 232;
     }
     DrawRoundedBorder(g, RectDip(cardX, cardY, cardW, bgCardH), 7, t.card, t.cardBorder);
-    DrawTextBlock(g, L"Background", RectDip(cardX + 19, cardY + 16, 160, 20), 13, t.fg, FontStyleBold);
+    DrawTextBlock(g, L"Background", RectDip(cardX + 19, cardY + 16, 160, 20), 14, t.fg, FontStyleBold);
 
-    DrawRoundedBorder(g, RectDip(cardX + 19, cardY + 47, 222, 36), 6, t.ctrl, t.ctrlBorder);
+    DrawRoundedBorder(g, RectDip(cardX + 19, cardY + 47, 222, 34), 6, t.ctrl, t.ctrlBorder);
     DrawSegment(g, g_layout.segNone, L"None", g_state.settings.mode == BackdropMode::None, t);
     DrawSegment(g, g_layout.segSolid, L"Solid", g_state.settings.mode == BackdropMode::Solid, t);
     DrawSegment(g, g_layout.segChecker, L"Checker", g_state.settings.mode == BackdropMode::Checker, t);
@@ -2082,39 +2150,49 @@ void DrawLeftPane(Graphics& g, const Theme& t)
 
     const double formatsY = cardY + bgCardH + 14;
     DrawRoundedBorder(g, RectDip(cardX, formatsY, cardW, 74), 7, t.card, t.cardBorder);
-    DrawTextBlock(g, L"Supported formats", RectDip(cardX + 19, formatsY + 13, cardW - 120, 20), 13, t.fg);
-    std::wstring formatSummary = std::to_wstring(EnabledFormatCount()) + L" selected";
+    DrawTextBlock(g, L"Supported formats", RectDip(cardX + 19, formatsY + 13, cardW - 120, 20), 14, t.fg, FontStyleBold);
+    std::wstring formatSummary = std::to_wstring(EnabledFormatCount()) + L" formats enabled";
     if (!g_state.ghostscriptInstalled) {
-        formatSummary += L"; Ghostscript missing";
+        formatSummary += L" \u00b7 Ghostscript not installed";
     }
-    DrawTextBlock(g, formatSummary, RectDip(cardX + 19, formatsY + 36, cardW - 130, 22), 11.5f, t.fg2,
+    DrawTextBlock(g, formatSummary, RectDip(cardX + 19, formatsY + 36, cardW - 130, 22), 12.5f, t.fg2,
         FontStyleRegular, StringAlignmentNear, StringAlignmentNear, true);
     DrawButton(g, g_layout.formatManageBtn, L"Manage", t, false, false, g_hover == Hit::FormatManage);
 
     double nextY = formatsY + 88;
     DrawRoundedBorder(g, RectDip(cardX, nextY, cardW, 74), 7, t.card, t.cardBorder);
-    DrawTextBlock(g, L"Restart Explorer & clear cache on save", RectDip(cardX + 19, nextY + 13, cardW - 86, 20), 13, t.fg);
+    DrawTextBlock(g, L"Restart Explorer & clear cache on save", RectDip(cardX + 19, nextY + 13, cardW - 86, 20), 14, t.fg, FontStyleBold);
     DrawTextBlock(g, L"Clears thumbcache_*.db and restarts the shell on save.",
-        RectDip(cardX + 19, nextY + 36, cardW - 86, 28), 11.5f, t.fg2, FontStyleRegular, StringAlignmentNear, StringAlignmentNear, true);
-    DrawRoundedBorder(g, g_layout.restartToggle, 10,
-        g_state.settings.deleteThumbnailDbsOnSave ? t.accent : Color(0, 0, 0, 0),
-        g_state.settings.deleteThumbnailDbsOnSave ? t.accent : t.toggleOff);
-    const double thumbX = Dip(g_layout.restartToggle.left) + (g_state.settings.deleteThumbnailDbsOnSave ? 22 : 4);
-    DrawRounded(g, RectDip(thumbX, Dip(g_layout.restartToggle.top) + 4, 12, 12), 6,
-        g_state.settings.deleteThumbnailDbsOnSave ? t.accentText : t.toggleOff);
+        RectDip(cardX + 19, nextY + 36, cardW - 86, 28), 12.5f, t.fg2, FontStyleRegular, StringAlignmentNear, StringAlignmentNear, true);
+    DrawSwitch(g, g_layout.restartToggle, g_state.settings.deleteThumbnailDbsOnSave, t);
 
-    const double updateY = nextY + 88;
-    DrawRoundedBorder(g, RectDip(cardX, updateY, cardW, 74), 7, t.card, t.cardBorder);
-    DrawTextBlock(g, L"Check for updates", RectDip(cardX + 19, updateY + 13, cardW - 120, 20), 13, t.fg);
+    const double registrationY = nextY + 88;
+    DrawRoundedBorder(g, RectDip(cardX, registrationY, cardW, 74), 7, t.card, t.cardBorder);
+    SolidBrush regDot(RegistrationDot(t));
+    g.FillEllipse(&regDot, RectFOf(RectDip(cardX + 19, registrationY + 32, 9, 9)));
+    DrawTextBlock(g, L"Thumbnail handler", RectDip(cardX + 39, registrationY + 18, cardW - 58, 18), 14, t.fg, FontStyleBold);
+    DrawTextBlock(g, RegistrationText(), RectDip(cardX + 39, registrationY + 39, cardW - 58, 20), 12.5f, t.fg2);
+
+    const double updateY = registrationY + 88;
+    DrawRoundedBorder(g, RectDip(cardX, updateY, cardW, 150), 7, t.card, t.cardBorder);
+    DrawTextBlock(g, L"Updates", RectDip(cardX + 19, updateY + 16, cardW - 38, 20), 14, t.fg, FontStyleBold);
     const std::wstring status = g_state.updateStatus.empty()
-        ? std::wstring(L"Current version ") + kBackdropperVersion
+        ? L"Last checked moments ago"
         : g_state.updateStatus;
-    DrawTextBlock(g, status, RectDip(cardX + 19, updateY + 36, cardW - 120, 28), 11.5f, t.fg2,
+    DrawTextBlock(g, status, RectDip(cardX + 19, updateY + 39, cardW - 38, 24), 12.5f, t.fg2,
         FontStyleRegular, StringAlignmentNear, StringAlignmentNear, true);
+    DrawTextBlock(g, L"Check automatically", RectDip(cardX + 19, updateY + 72, cardW - 78, 20), 13, t.fg);
+    DrawSwitch(g, g_layout.autoCheckToggle, g_state.settings.checkUpdatesAutomatically, t);
     if (UpdateButtonVisible()) {
         DrawButton(g, g_layout.installUpdateBtn, ForceUpdateVisible() ? L"Force Update" : L"Update", t, true, false, g_hover == Hit::InstallUpdate);
     }
-    DrawButton(g, g_layout.checkUpdatesBtn, L"Check", t, false, false, g_hover == Hit::CheckUpdates);
+    DrawButton(g, g_layout.checkUpdatesBtn, L"Check now", t, false, false, g_hover == Hit::CheckUpdates);
+    DrawTextBlock(g, std::wstring(L"v") + kBackdropperVersion,
+        RectDip(cardX + cardW - 110, updateY + 108, 91, 18), 11.5f, t.fg2,
+        FontStyleRegular, StringAlignmentFar, StringAlignmentCenter);
+
+    g.SetClip(&oldClip, CombineModeReplace);
+    DrawLeftScrollbar(g, t);
 }
 
 void DrawRightPane(Graphics& g, const Theme& t)
@@ -2144,7 +2222,7 @@ void DrawFooter(Graphics& g, const RECT& client, const Theme& t)
     g.FillEllipse(&dot, RectFOf(RectDip(20, y + 25, 8, 8)));
     DrawTextBlock(g, RegistrationText(), RectDip(38, y + 19, 420, 20), 12.5f, t.fg2);
 
-    DrawButton(g, g_layout.registerBtn, L"Register formats", t, false, false, g_hover == Hit::Register);
+    DrawButton(g, g_layout.registerBtn, L"Register", t, false, false, g_hover == Hit::Register);
     DrawButton(g, g_layout.unregisterBtn, L"Unregister", t, false, !g_state.registered, g_hover == Hit::Unregister);
     g.FillRectangle(&stroke, RectFOf(RectDip(Dip(g_layout.saveBtn.left) - 15, y + 17, 1, 24)));
     DrawButton(g, g_layout.saveBtn, L"Save", t, true, false, g_hover == Hit::Save);
@@ -2196,16 +2274,25 @@ void DrawAboutDialog(Graphics& g, const RECT& client, const Theme& t)
         DrawRounded(g, g_layout.aboutClose, 4, EffectiveDark() ? Rgba(255, 255, 255, 18) : Rgba(0, 0, 0, 8));
     }
     const Color closeColor = g_hover == Hit::AboutClose ? t.fg : t.fg2;
-    DrawFluentIcon(g, RectDip(x + 257, y + 14, 22, 22), FluentIcon::Dismiss, closeColor);
+    DrawFluentIcon(g, RectDip(Dip(g_layout.aboutClose.left) + 6, Dip(g_layout.aboutClose.top) + 6, 22, 22), FluentIcon::Dismiss, closeColor);
 
-    DrawAppIcon(g, x + 122, y + 30, 56, t);
-    DrawTextBlock(g, L"Backdropper", RectDip(x + 22, y + 100, 256, 22), 16, t.fg,
+    DrawAppIcon(g, x + (w - 56) / 2, y + 56, 56, t);
+    DrawTextBlock(g, L"Backdropper", RectDip(x + 30, y + 130, w - 60, 30), 22, t.fg,
         FontStyleBold, StringAlignmentCenter, StringAlignmentCenter);
-    DrawTextBlock(g, std::wstring(L"Version ") + kBackdropperVersion, RectDip(x + 22, y + 124, 256, 18),
+    DrawTextBlock(g, std::wstring(L"Version ") + kBackdropperVersion, RectDip(x + 30, y + 161, w - 60, 18),
         12, t.fg2, FontStyleRegular, StringAlignmentCenter, StringAlignmentCenter);
+    DrawTextBlock(g, L"Give transparent images a checkerboard or solid background so they're easy to see in File Explorer.",
+        RectDip(x + 42, y + 194, w - 84, 60), 13, t.fg2, FontStyleRegular,
+        StringAlignmentCenter, StringAlignmentNear, true);
+
+    SolidBrush stroke(t.stroke);
+    g.FillRectangle(&stroke, RectFOf(RectDip(x + 30, y + 264, w - 60, 1)));
+    DrawTextBlock(g, L"\u00a9 2026 Chris Johnson. All rights reserved.",
+        RectDip(x + 30, y + 286, w - 60, 18), 12, t.fg2, FontStyleRegular,
+        StringAlignmentCenter, StringAlignmentCenter);
 
     DrawAboutActionButton(g, g_layout.aboutGithub, L"GitHub", t, Hit::AboutGithub, AboutActionIcon::Github);
-    DrawAboutActionButton(g, g_layout.aboutPrivacy, L"Privacy", t, Hit::AboutPrivacy, AboutActionIcon::Privacy);
+    DrawAboutActionButton(g, g_layout.aboutPrivacy, L"Privacy Policy", t, Hit::AboutPrivacy, AboutActionIcon::Privacy);
 }
 
 void DrawPrivacyMarkdown(Graphics& g, const RECT& viewport, const Theme& t)
@@ -2214,10 +2301,58 @@ void DrawPrivacyMarkdown(Graphics& g, const RECT& viewport, const Theme& t)
     const double left = Dip(viewport.left);
     const double width = Dip(viewport.right - viewport.left) - 12;
     double y = Dip(viewport.top) - g_state.privacyScroll;
+    constexpr float bodySize = 11.5f;
+    constexpr float headingSize = 12.0f;
 
     Region oldClip;
     g.GetClip(&oldClip);
     g.SetClip(RectFOf(viewport), CombineModeReplace);
+
+    auto measureLine = [&](const std::wstring& value, float size, int style, const wchar_t* familyName = L"Segoe UI Variable Text") {
+        FontFamily family(familyName);
+        FontFamily fallback(L"Segoe UI");
+        const FontFamily* selectedFamily = family.GetLastStatus() == Ok ? &family : &fallback;
+        Font font(selectedFamily, static_cast<REAL>(Px(size)), style, UnitPixel);
+        StringFormat format;
+        format.SetFormatFlags(StringFormatFlagsNoWrap | StringFormatFlagsMeasureTrailingSpaces);
+        RectF bounds;
+        g.MeasureString(value.c_str(), -1, &font, RectF(0, 0, 10000, 10000), &format, &bounds);
+        return Dip(static_cast<int>(std::ceil(bounds.Width)));
+    };
+
+    auto drawWrapped = [&](const std::wstring& value, float size, const Color& color, int style,
+                           double lineHeight, double afterGap) {
+        std::wistringstream words(value);
+        std::wstring word;
+        std::wstring line;
+        bool drewLine = false;
+
+        while (words >> word) {
+            const std::wstring candidate = line.empty() ? word : line + L" " + word;
+            if (!line.empty() && measureLine(candidate, size, style) > width) {
+                if (VerticallyVisible(y, lineHeight, viewport)) {
+                    DrawTextBlock(g, line, RectDip(left, y, width, lineHeight), size, color, style);
+                }
+                y += lineHeight;
+                drewLine = true;
+                line = word;
+            } else {
+                line = candidate;
+            }
+        }
+
+        if (!line.empty()) {
+            if (VerticallyVisible(y, lineHeight, viewport)) {
+                DrawTextBlock(g, line, RectDip(left, y, width, lineHeight), size, color, style);
+            }
+            y += lineHeight;
+            drewLine = true;
+        }
+
+        if (drewLine) {
+            y += afterGap;
+        }
+    };
 
     for (size_t i = 0; i < lines.size();) {
         const std::wstring& line = lines[i];
@@ -2226,16 +2361,11 @@ void DrawPrivacyMarkdown(Graphics& g, const RECT& viewport, const Theme& t)
             continue;
         }
         if (line.empty()) {
-            y += 10;
             ++i;
             continue;
         }
         if (StartsWith(line, L"## ")) {
-            const double height = 22;
-            if (VerticallyVisible(y, height, viewport)) {
-                DrawTextBlock(g, line.substr(3), RectDip(left, y, width, height), 13.5f, t.fg, FontStyleBold);
-            }
-            y += 40;
+            drawWrapped(line.substr(3), headingSize, t.fg, FontStyleBold, 13, 0);
             ++i;
             continue;
         }
@@ -2253,13 +2383,13 @@ void DrawPrivacyMarkdown(Graphics& g, const RECT& viewport, const Theme& t)
                 ++i;
             }
 
-            const double boxHeight = std::max(52.0, 20.0 + codeLines * 22.0);
+            const double boxHeight = std::max(34.0, 12.0 + codeLines * 15.0);
             if (VerticallyVisible(y, boxHeight, viewport)) {
                 DrawRoundedBorder(g, RectDip(left, y, width, boxHeight), 5, t.ctrl, t.ctrlBorder);
-                DrawTextBlockWithFamily(g, code, RectDip(left + 18, y + 14, width - 36, boxHeight - 22),
-                    12.5f, t.fg, FontStyleBold, L"Consolas");
+                DrawTextBlockWithFamily(g, code, RectDip(left + 16, y + 7, width - 32, boxHeight - 12),
+                    bodySize, t.fg, FontStyleBold, L"Consolas");
             }
-            y += boxHeight + 18;
+            y += boxHeight;
             continue;
         }
 
@@ -2268,12 +2398,7 @@ void DrawPrivacyMarkdown(Graphics& g, const RECT& viewport, const Theme& t)
             paragraph += L" " + StripInlineMarkdown(lines[i]);
         }
 
-        const double height = MeasureTextHeight(g, paragraph, static_cast<float>(width), 12.5f, FontStyleRegular) + 4;
-        if (VerticallyVisible(y, height, viewport)) {
-            DrawTextBlock(g, paragraph, RectDip(left, y, width, height), 12.5f, t.fg2,
-                FontStyleRegular, StringAlignmentNear, StringAlignmentNear, true);
-        }
-        y += height + 16;
+        drawWrapped(paragraph, bodySize, t.fg2, FontStyleRegular, 13, 0);
     }
 
     g.SetClip(&oldClip, CombineModeReplace);
@@ -2288,17 +2413,17 @@ void DrawPrivacyScrollbar(Graphics& g, const Theme& t)
     }
 
     const RECT dlg = g_layout.privacyDialog;
-    const double x = Dip(dlg.right) - 22;
-    const double top = Dip(g_layout.privacyViewport.top) + 28;
-    const double height = Dip(g_layout.privacyViewport.bottom) - top - 28;
+    const double x = Dip(dlg.right) - 12;
+    const double top = Dip(dlg.top) + 76;
+    const double height = Dip(dlg.bottom) - top - 10;
     const double maxScroll = std::max(1.0, g_state.privacyContentHeight - viewportHeight);
     const double thumbHeight = std::max(42.0, height * viewportHeight / g_state.privacyContentHeight);
     const double thumbY = top + (height - thumbHeight) * std::min(maxScroll, g_state.privacyScroll) / maxScroll;
     const Color scrollColor = EffectiveDark() ? Rgba(255, 255, 255, 115) : Rgba(0, 0, 0, 95);
 
-    DrawFluentIcon(g, RectDip(x + 2, top - 29, 16, 16), FluentIcon::ChevronUp, scrollColor);
-    DrawFluentIcon(g, RectDip(x + 2, top + height + 13, 16, 16), FluentIcon::ChevronDown, scrollColor);
-    DrawRounded(g, RectDip(x + 3, thumbY, 14, thumbHeight), 7, scrollColor);
+    DrawFluentIcon(g, RectDip(x - 4, top - 18, 16, 16), FluentIcon::ChevronUp, scrollColor);
+    DrawFluentIcon(g, RectDip(x - 4, top + height + 2, 16, 16), FluentIcon::ChevronDown, scrollColor);
+    DrawRounded(g, RectDip(x, thumbY, 8, thumbHeight), 4, scrollColor);
 }
 
 void DrawPrivacyDialog(Graphics& g, const RECT& client, const Theme& t)
@@ -2321,18 +2446,18 @@ void DrawPrivacyDialog(Graphics& g, const RECT& client, const Theme& t)
 
     Theme iconTheme = t;
     iconTheme.fg = t.accent;
-    DrawShieldIcon(g, RectDip(x + 32, y + 39, 24, 24), iconTheme);
-    DrawTextBlock(g, L"Privacy Policy", RectDip(x + 76, y + 39, 260, 30), 16, t.fg, FontStyleBold,
+    DrawShieldIcon(g, RectDip(x + 22, y + 25, 18, 18), iconTheme);
+    DrawTextBlock(g, L"Privacy Policy", RectDip(x + 52, y + 20, 260, 30), 15, t.fg, FontStyleBold,
         StringAlignmentNear, StringAlignmentCenter);
 
     if (g_hover == Hit::PrivacyClose) {
         DrawRounded(g, g_layout.privacyClose, 4, EffectiveDark() ? Rgba(255, 255, 255, 18) : Rgba(0, 0, 0, 8));
     }
     const Color closeColor = g_hover == Hit::PrivacyClose ? t.fg : t.fg2;
-    DrawFluentIcon(g, RectDip(x + w - 62, y + 38, 24, 24), FluentIcon::Dismiss, closeColor);
+    DrawFluentIcon(g, RectDip(Dip(g_layout.privacyClose.left) + 17, Dip(g_layout.privacyClose.top) + 14, 12, 12), FluentIcon::Dismiss, closeColor);
 
     SolidBrush stroke(t.stroke);
-    g.FillRectangle(&stroke, RectFOf(RectDip(x, y + 106, w, 1)));
+    g.FillRectangle(&stroke, RectFOf(RectDip(x, y + 70, w, 1)));
 
     DrawPrivacyMarkdown(g, g_layout.privacyViewport, t);
     DrawPrivacyScrollbar(g, t);
@@ -2356,17 +2481,18 @@ void DrawFormatsDialog(Graphics& g, const RECT& client, const Theme& t)
     DrawRounded(g, RectDip(x, y + 5, w, h), 8, Rgba(0, 0, 0, 16));
     DrawRoundedBorder(g, dlg, 8, t.dialogBg, t.dialogBorder);
 
-    DrawTextBlock(g, L"Supported formats", RectDip(x + 22, y + 24, 260, 24), 18, t.fg, FontStyleBold);
+    DrawTextBlock(g, L"Supported formats", RectDip(x + 24, y + 27, 260, 26), 20, t.fg, FontStyleBold);
     DrawTextBlock(g, L"Choose which extensions Backdropper registers as the Explorer thumbnail handler.",
-        RectDip(x + 22, y + 52, w - 90, 20), 12, t.fg2);
+        RectDip(x + 24, y + 58, w - 92, 40), 13, t.fg2, FontStyleRegular,
+        StringAlignmentNear, StringAlignmentNear, true);
 
     if (g_hover == Hit::FormatClose) {
         DrawRounded(g, g_layout.formatsClose, 4, EffectiveDark() ? Rgba(255, 255, 255, 18) : Rgba(0, 0, 0, 8));
     }
     const Color closeColor = g_hover == Hit::FormatClose ? t.fg : t.fg2;
-    DrawFluentIcon(g, RectDip(x + w - 43, y + 17, 22, 22), FluentIcon::Dismiss, closeColor);
+    DrawFluentIcon(g, RectDip(Dip(g_layout.formatsClose.left) + 17, Dip(g_layout.formatsClose.top) + 14, 12, 12), FluentIcon::Dismiss, closeColor);
 
-    for (size_t i = 0; i < kBackdropperFormatCount; ++i) {
+    for (const size_t i : kFormatsDialogOrder) {
         const RECT row = g_layout.formatToggles[i];
         const Hit rowHit = static_cast<Hit>(static_cast<int>(Hit::FormatPng) + static_cast<int>(i));
         const bool available = g_state.formatAvailable[i];
@@ -2375,19 +2501,23 @@ void DrawFormatsDialog(Graphics& g, const RECT& client, const Theme& t)
 
         const Color title = available ? t.fg : Color(120, t.fg.GetR(), t.fg.GetG(), t.fg.GetB());
         const Color sub = available ? t.fg2 : Color(95, t.fg2.GetR(), t.fg2.GetG(), t.fg2.GetB());
-        DrawTextBlock(g, BackdropperFormatLabel(kBackdropperFormats[i]), RectDip(Dip(row.left) + 12, Dip(row.top) + 7, 54, 16), 12.5f, title, FontStyleBold);
-        DrawTextBlock(g, FormatStatus(i), RectDip(Dip(row.left) + 68, Dip(row.top) + 8, 112, 16), 11, sub);
+        DrawTextBlock(g, BackdropperFormatLabel(kBackdropperFormats[i]), RectDip(Dip(row.left) + 12, Dip(row.top) + 9, 46, 18), 13, title, FontStyleBold);
+        DrawTextBlock(g, FormatStatus(i), RectDip(Dip(row.left) + 69, Dip(row.top) + 10, 112, 16), 11.5f, sub);
 
         const RECT sw = RectDip(Dip(row.right) - 52, Dip(row.top) + 11, 40, 20);
         DrawFormatSwitch(g, sw, EffectiveFormatEnabled(i), available, t);
     }
 
+    SolidBrush footerStroke(t.stroke);
+    g.FillRectangle(&footerStroke, RectFOf(RectDip(x, y + h - 68, w, 1)));
+    DrawInfoIcon(g, RectDip(x + 24, y + h - 42, 16, 16), t);
+
     if (g_state.ghostscriptInstalled) {
-        DrawTextBlock(g, L"Ghostscript detected. EPS and legacy PostScript AI can be rendered.",
-            RectDip(x + 22, y + h - 46, 360, 20), 11.5f, t.fg2);
+        DrawTextBlock(g, L"Ghostscript detected. EPS and AI files render locally.",
+            RectDip(x + 52, y + h - 49, 390, 20), 12, t.fg2);
     } else {
-        DrawTextBlock(g, L"EPS and legacy AI require Ghostscript.", RectDip(x + 22, y + h - 46, 210, 20), 11.5f, t.fg2);
-        DrawTextBlock(g, L"Download Ghostscript", g_layout.ghostscriptLink, 11.5f, t.accent, FontStyleRegular);
+        DrawTextBlock(g, L"EPS and PostScript-based AI files need Ghostscript.", RectDip(x + 52, y + h - 49, 380, 18), 12, t.fg2);
+        DrawTextBlock(g, L"Download Ghostscript", g_layout.ghostscriptLink, 12, t.accent, FontStyleRegular);
         DrawLine(g, Dip(g_layout.ghostscriptLink.left), Dip(g_layout.ghostscriptLink.top) + 17,
             Dip(g_layout.ghostscriptLink.left) + 106, Dip(g_layout.ghostscriptLink.top) + 17, t.accent, 1);
     }
@@ -2485,6 +2615,7 @@ Hit HitTest(POINT pt)
     if (PtIn(g_layout.sizeDown, pt)) return Hit::SizeDown;
     if (PtIn(g_layout.sizeUp, pt)) return Hit::SizeUp;
     if (PtIn(g_layout.restartToggle, pt)) return Hit::RestartToggle;
+    if (PtIn(g_layout.autoCheckToggle, pt)) return Hit::AutoCheckToggle;
     if (PtIn(g_layout.formatManageBtn, pt)) return Hit::FormatManage;
     if (PtIn(g_layout.installUpdateBtn, pt)) return Hit::InstallUpdate;
     if (PtIn(g_layout.checkUpdatesBtn, pt)) return Hit::CheckUpdates;
@@ -2591,17 +2722,17 @@ void CheckForUpdates(HWND window)
     if (!ok) {
         g_state.updateAvailable = false;
         g_state.latestVersion.clear();
-        g_state.updateStatus = L"Could not reach GitHub Releases.";
+        g_state.updateStatus = L"Could not reach GitHub Releases";
     } else {
         const int versionCompare = CompareVersions(latest, kBackdropperVersion);
         g_state.latestVersion = latest;
         g_state.updateAvailable = versionCompare > 0;
         if (versionCompare > 0) {
-            g_state.updateStatus = std::wstring(L"Version ") + latest + L" is available.";
+            g_state.updateStatus = std::wstring(L"Version ") + latest + L" is available to download";
         } else if (versionCompare < 0) {
-            g_state.updateStatus = std::wstring(L"Running newer than latest release: ") + latest + L".";
+            g_state.updateStatus = std::wstring(L"Running newer than latest release: ") + latest;
         } else {
-            g_state.updateStatus = std::wstring(L"Up to date. Latest release: ") + latest + L".";
+            g_state.updateStatus = L"You're on the latest version";
         }
     }
     InvalidateRect(window, nullptr, TRUE);
@@ -2743,6 +2874,10 @@ void ActivateHit(HWND window, Hit hit)
         break;
     case Hit::RestartToggle:
         g_state.settings.deleteThumbnailDbsOnSave = !g_state.settings.deleteThumbnailDbsOnSave;
+        InvalidateRect(window, nullptr, TRUE);
+        break;
+    case Hit::AutoCheckToggle:
+        g_state.settings.checkUpdatesAutomatically = !g_state.settings.checkUpdatesAutomatically;
         InvalidateRect(window, nullptr, TRUE);
         break;
     case Hit::FormatManage:
@@ -2926,6 +3061,20 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
             InvalidateRect(window, nullptr, FALSE);
             return 0;
         }
+        if (!DialogOpen() && !AboutOpen() && !g_state.formatsOpen) {
+            CalculateLayout(window);
+            POINT pt = { GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam) };
+            ScreenToClient(window, &pt);
+            const double viewportHeight = Dip(g_layout.leftPane.bottom - g_layout.leftPane.top);
+            const double maxScroll = std::max(0.0, g_state.leftContentHeight - viewportHeight);
+            if (maxScroll > 0 && PtIn(g_layout.leftPane, pt)) {
+                g_state.leftScroll = std::max(0.0, std::min(maxScroll,
+                    g_state.leftScroll - GET_WHEEL_DELTA_WPARAM(wparam) / static_cast<double>(WHEEL_DELTA) * 54.0));
+                LayoutChildWindows(window);
+                InvalidateRect(window, nullptr, FALSE);
+                return 0;
+            }
+        }
         break;
 
     case WM_KEYDOWN:
@@ -2967,7 +3116,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
         const Theme t = CurrentTheme();
         HDC hdc = reinterpret_cast<HDC>(wparam);
         SetTextColor(hdc, SolidColorRef(t.fg, RGB(26, 26, 26)));
-        SetBkColor(hdc, SolidColorRef(t.ctrl, EffectiveDark() ? RGB(47, 47, 47) : RGB(255, 255, 255)));
+        SetBkColor(hdc, SolidControlRef());
         return reinterpret_cast<LRESULT>(g_editBrush);
     }
 
