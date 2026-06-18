@@ -114,6 +114,8 @@ constexpr std::array<ViewMode, 7> kViewMenuOrder = {
     ViewMode::ExtraLarge, ViewMode::Large, ViewMode::Medium, ViewMode::Small,
     ViewMode::List, ViewMode::Details, ViewMode::Tiles
 };
+static_assert(static_cast<int>(Hit::FormatDds) - static_cast<int>(Hit::FormatPng) + 1 == static_cast<int>(kBackdropperFormatCount));
+static_assert(static_cast<int>(Hit::MenuTiles) - static_cast<int>(Hit::MenuExtraLarge) + 1 == static_cast<int>(kViewMenuOrder.size()));
 
 enum class FluentIcon {
     Add,
@@ -631,6 +633,74 @@ int FormatIndexFromHit(Hit hit)
     const int first = static_cast<int>(Hit::FormatPng);
     const int index = static_cast<int>(hit) - first;
     return index >= 0 && index < static_cast<int>(kBackdropperFormatCount) ? index : -1;
+}
+
+RECT HoverRect(Hit hit)
+{
+    const int formatIndex = FormatIndexFromHit(hit);
+    if (formatIndex >= 0) {
+        return g_layout.formatToggles[formatIndex];
+    }
+
+    const int menuIndex = static_cast<int>(hit) - static_cast<int>(Hit::MenuExtraLarge);
+    if (menuIndex >= 0 && menuIndex < static_cast<int>(g_layout.menuItems.size())) {
+        return g_layout.menuItems[menuIndex];
+    }
+
+    switch (hit) {
+    case Hit::MatchSystem: return g_layout.matchSystem;
+    case Hit::Theme: return g_layout.theme;
+    case Hit::Minimize: return g_layout.minimize;
+    case Hit::Maximize: return g_layout.maximize;
+    case Hit::Close: return g_layout.close;
+    case Hit::SegNone: return g_layout.segNone;
+    case Hit::SegSolid: return g_layout.segSolid;
+    case Hit::SegChecker: return g_layout.segChecker;
+    case Hit::SolidSwatch: return g_layout.solidSwatch;
+    case Hit::CheckerASwatch: return g_layout.checkerASwatch;
+    case Hit::CheckerBSwatch: return g_layout.checkerBSwatch;
+    case Hit::SizeDown: return g_layout.sizeDown;
+    case Hit::SizeUp: return g_layout.sizeUp;
+    case Hit::RestartToggle: return g_layout.restartToggle;
+    case Hit::CheckUpdates: return g_layout.checkUpdatesBtn;
+    case Hit::InstallUpdate: return g_layout.installUpdateBtn;
+    case Hit::ViewButton: return g_layout.viewButton;
+    case Hit::About: return g_layout.aboutBtn;
+    case Hit::AboutClose: return g_layout.aboutClose;
+    case Hit::AboutGithub: return g_layout.aboutGithub;
+    case Hit::AboutPrivacy: return g_layout.aboutPrivacy;
+    case Hit::PrivacyClose: return g_layout.privacyClose;
+    case Hit::FormatManage: return g_layout.formatManageBtn;
+    case Hit::FormatClose: return g_layout.formatsClose;
+    case Hit::FormatDone: return g_layout.formatsDone;
+    case Hit::GhostscriptLink: return g_layout.ghostscriptLink;
+    case Hit::Register: return g_layout.registerBtn;
+    case Hit::Unregister: return g_layout.unregisterBtn;
+    case Hit::Save: return g_layout.saveBtn;
+    case Hit::DialogOk: return g_layout.dialogOk;
+    default: return {};
+    }
+}
+
+void InvalidateHoverRect(HWND window, Hit hit)
+{
+    RECT rect = HoverRect(hit);
+    if (IsEmptyRect(rect)) {
+        return;
+    }
+    InflateRect(&rect, Px(3), Px(3));
+    InvalidateRect(window, &rect, FALSE);
+}
+
+void SetHover(HWND window, Hit hit)
+{
+    if (hit == g_hover) {
+        return;
+    }
+    const Hit old = g_hover;
+    g_hover = hit;
+    InvalidateHoverRect(window, old);
+    InvalidateHoverRect(window, hit);
 }
 
 bool RunRegsvr(HWND owner, bool unregister)
@@ -2830,18 +2900,14 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
         POINT pt = { GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam) };
         CalculateLayout(window);
         const Hit hit = HitTest(pt);
-        if (hit != g_hover) {
-            g_hover = hit;
-            InvalidateRect(window, nullptr, FALSE);
-        }
+        SetHover(window, hit);
         SetCursor(LoadCursorW(nullptr, hit == Hit::None ? IDC_ARROW : IDC_HAND));
         return 0;
     }
 
     case WM_MOUSELEAVE:
         g_trackingMouse = false;
-        g_hover = Hit::None;
-        InvalidateRect(window, nullptr, FALSE);
+        SetHover(window, Hit::None);
         return 0;
 
     case WM_LBUTTONUP: {
