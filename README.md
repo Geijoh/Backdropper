@@ -4,7 +4,7 @@ Native Windows thumbnail utility for transparent images.
 
 Current build: WIC-backed thumbnail handler with native SVG/PDF rendering plus built-in PSD and TGA fallback decoding. It composites transparent thumbnails over a solid/checker/none background in Explorer.
 
-Requested extensions: `.png`, `.webp`, `.gif`, `.ico`, `.svg`, `.psd`, `.ai`, `.eps`, `.pdf`, `.avif`, `.tga`, `.dds`.
+Supported/targeted extensions: `.png`, `.webp`, `.gif`, `.ico`, `.svg`, `.psd`, `.ai`, `.eps`, `.pdf`, `.avif`, `.tga`, `.dds`.
 
 Backdropper registers SVG, PDF, PDF-compatible AI, PSD, and TGA through built-in fallback renderers. EPS/PostScript AI register when Ghostscript is installed. Other formats are registered only when Windows has an installed Windows Imaging Component decoder, so unsupported formats keep their existing Explorer behavior.
 

@@ -691,20 +691,58 @@ void DrawCheck(Graphics& g, double x, double y, const Color& color)
     DrawLine(g, x + 4, y + 9, x + 11, y, color, 1.7f);
 }
 
-void DrawAppIcon(Graphics& g, double x, double y, double size, const Theme& t)
+void DrawAppIcon(Graphics& g, double x, double y, double size, const Theme&)
 {
-    const RECT outer = RectDip(x, y, size, size);
-    DrawRounded(g, outer, 4, Rgba(230, 230, 230));
+    auto s = [&](double v) { return v * size / 256.0; };
+    auto iconRect = [&](double rx, double ry, double rw, double rh) {
+        return RectDip(x + s(rx), y + s(ry), s(rw), s(rh));
+    };
 
-    SolidBrush chk(Rgba(184, 187, 194));
-    const double s = size / 4.5;
-    for (auto [cx, cy] : { std::pair<double, double>{ 0, 0 }, { 2, 0 }, { 1, 1 }, { 3, 1 }, { 0, 2 }, { 2, 2 } }) {
-        g.FillRectangle(&chk, RectFOf(RectDip(x + cx * s, y + cy * s, s, s)));
+    const RectF box = RectFOf(iconRect(26, 26, 204, 204));
+    const REAL radius = static_cast<REAL>(Px(s(14)));
+    GraphicsPath clip;
+    clip.AddArc(box.X, box.Y, radius * 2, radius * 2, 180, 90);
+    clip.AddArc(box.X + box.Width - radius * 2, box.Y, radius * 2, radius * 2, 270, 90);
+    clip.AddArc(box.X + box.Width - radius * 2, box.Y + box.Height - radius * 2, radius * 2, radius * 2, 0, 90);
+    clip.AddArc(box.X, box.Y + box.Height - radius * 2, radius * 2, radius * 2, 90, 90);
+    clip.CloseFigure();
+
+    GraphicsState state = g.Save();
+    g.SetClip(&clip);
+
+    SolidBrush base(Rgba(235, 235, 235));
+    g.FillPath(&base, &clip);
+
+    SolidBrush light(Rgba(235, 235, 235));
+    SolidBrush dark(Rgba(175, 181, 190));
+    const std::array<std::pair<double, double>, 18> lightRects = {{
+        {26, 26}, {26, 94}, {26, 162}, {196, 60}, {196, 128}, {196, 196},
+        {94, 26}, {94, 94}, {94, 162}, {128, 60}, {128, 128}, {128, 196},
+        {162, 26}, {162, 94}, {162, 162}, {60, 60}, {60, 128}, {60, 196},
+    }};
+    const std::array<std::pair<double, double>, 18> darkRects = {{
+        {60, 26}, {60, 94}, {60, 162}, {162, 60}, {162, 128}, {162, 196},
+        {128, 26}, {128, 94}, {128, 162}, {94, 60}, {94, 128}, {94, 196},
+        {196, 26}, {196, 94}, {196, 162}, {26, 60}, {26, 128}, {26, 196},
+    }};
+    for (const auto& [rx, ry] : lightRects) {
+        g.FillRectangle(&light, RectFOf(iconRect(rx, ry, 34, 34)));
+    }
+    for (const auto& [rx, ry] : darkRects) {
+        g.FillRectangle(&dark, RectFOf(iconRect(rx, ry, 34, 34)));
     }
 
-    SolidBrush dot(Rgba(255, 90, 122));
-    g.FillEllipse(&dot, RectFOf(RectDip(x + size * .47, y + size * .47, size * .53, size * .53)));
-    DrawRoundedBorder(g, outer, 4, Color(0, 0, 0, 0), t.stroke);
+    PointF triangle[] = {
+        PointF(static_cast<REAL>(Px(x + s(256))), static_cast<REAL>(Px(y + s(68)))),
+        PointF(static_cast<REAL>(Px(x + s(68))), static_cast<REAL>(Px(y + s(256)))),
+        PointF(static_cast<REAL>(Px(x + s(256))), static_cast<REAL>(Px(y + s(256)))),
+    };
+    SolidBrush panel(Rgba(243, 243, 243));
+    g.FillPolygon(&panel, triangle, 3);
+
+    SolidBrush dot(Rgba(246, 112, 103));
+    g.FillEllipse(&dot, RectFOf(iconRect(111, 111, 102, 102)));
+    g.Restore(state);
 }
 
 void DrawFolderIcon(Graphics& g, double x, double y)
@@ -1496,7 +1534,7 @@ void DrawAboutDialog(Graphics& g, const RECT& client, const Theme& t)
         FontStyleBold, StringAlignmentCenter, StringAlignmentCenter);
     DrawTextBlock(g, std::wstring(L"Version ") + kBackdropperVersion, RectDip(x + 64, y + 160, 266, 20),
         12.5f, t.fg2, FontStyleRegular, StringAlignmentCenter, StringAlignmentCenter);
-    DrawTextBlock(g, L"Composite transparent PNG thumbnails over a\nbackground so they're easy to see in File Explorer.",
+    DrawTextBlock(g, L"Composite transparent image thumbnails over a\nbackground so they're easy to see in File Explorer.",
         RectDip(x + 30, y + 188, 334, 52), 12.5f, t.fg2,
         FontStyleRegular, StringAlignmentCenter, StringAlignmentNear, true);
 
@@ -1803,7 +1841,7 @@ void ActivateHit(HWND window, Hit hit)
             const bool ok = RunRegsvr(window, false);
             g_state.registered = IsBackdropperHandlerRegistered();
             OpenDialog(window, ok ? L"Registered image handlers" : L"Registration failed",
-                ok ? L"Backdropper is now the per-user Shell thumbnail handler for requested formats with WIC, native, or optional Ghostscript rendering."
+                ok ? L"Backdropper is now the per-user Shell thumbnail handler for supported formats with WIC, native, or optional Ghostscript rendering."
                    : L"regsvr32 could not register BackdropperThumb.dll.");
         }
         break;
