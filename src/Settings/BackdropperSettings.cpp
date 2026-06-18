@@ -938,33 +938,6 @@ void DrawAboutActionButton(Graphics& g, const RECT& rect, const std::wstring& te
         12.5f, t.fg, FontStyleRegular, StringAlignmentNear, StringAlignmentCenter);
 }
 
-void DrawCreatedByLine(Graphics& g, const RECT& rect, const Theme& t)
-{
-    FontFamily family(L"Segoe UI Variable Text");
-    FontFamily fallback(L"Segoe UI");
-    const FontFamily* selectedFamily = family.GetLastStatus() == Ok ? &family : &fallback;
-    Font regular(selectedFamily, static_cast<REAL>(Px(12.5f)), FontStyleRegular, UnitPixel);
-    Font bold(selectedFamily, static_cast<REAL>(Px(12.5f)), FontStyleBold, UnitPixel);
-    StringFormat format;
-    format.SetFormatFlags(StringFormatFlagsNoWrap);
-    format.SetLineAlignment(StringAlignmentCenter);
-
-    const wchar_t prefix[] = L"Created by ";
-    const wchar_t name[] = L"Chris Johnson";
-    RectF prefixBounds;
-    RectF nameBounds;
-    g.MeasureString(prefix, -1, &regular, PointF(0, 0), &prefixBounds);
-    g.MeasureString(name, -1, &bold, PointF(0, 0), &nameBounds);
-
-    const REAL total = prefixBounds.Width + nameBounds.Width;
-    const REAL height = std::max(prefixBounds.Height, nameBounds.Height);
-    const REAL x = static_cast<REAL>(rect.left) + (static_cast<REAL>(rect.right - rect.left) - total) / 2;
-    const REAL y = static_cast<REAL>(rect.top) + (static_cast<REAL>(rect.bottom - rect.top) - height) / 2;
-    SolidBrush brush(t.fg);
-    g.DrawString(prefix, -1, &regular, PointF(x, y), &format, &brush);
-    g.DrawString(name, -1, &bold, PointF(x + prefixBounds.Width, y), &format, &brush);
-}
-
 void DrawSegment(Graphics& g, const RECT& rect, const std::wstring& text, bool active, const Theme& t)
 {
     if (active) {
@@ -1540,9 +1513,8 @@ void DrawAboutDialog(Graphics& g, const RECT& client, const Theme& t)
 
     SolidBrush divider(t.stroke);
     g.FillRectangle(&divider, RectFOf(RectDip(x + 28, y + 244, 338, 1)));
-    DrawCreatedByLine(g, RectDip(x + 64, y + 263, 266, 20), t);
     DrawTextBlock(g, L"\x00A9 2026 Chris Johnson. All rights reserved.",
-        RectDip(x + 64, y + 283, 266, 20), 12, t.fg2,
+        RectDip(x + 64, y + 264, 266, 20), 12.5f, t.fg2,
         FontStyleRegular, StringAlignmentCenter, StringAlignmentCenter);
 
     DrawAboutActionButton(g, g_layout.aboutGithub, L"GitHub", t, Hit::AboutGithub, true);
