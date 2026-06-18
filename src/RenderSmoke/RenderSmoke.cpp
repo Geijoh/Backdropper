@@ -77,10 +77,60 @@ HRESULT CreatePngStream(IStream** stream)
     return hr;
 }
 
+HRESULT CreateMemoryStream(const BYTE* data, UINT size, IStream** stream)
+{
+    *stream = SHCreateMemStream(data, size);
+    return *stream ? S_OK : E_OUTOFMEMORY;
+}
+
+HRESULT CreateTgaStream(IStream** stream)
+{
+    static constexpr BYTE data[] = {
+        0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 2, 0, 32, 0x28,
+        0, 0, 0, 0,       0, 0, 255, 255,
+        0, 255, 0, 255,   255, 0, 0, 255
+    };
+    return CreateMemoryStream(data, sizeof(data), stream);
+}
+
+HRESULT CreatePsdStream(IStream** stream)
+{
+    static constexpr BYTE data[] = {
+        '8', 'B', 'P', 'S', 0, 1, 0, 0, 0, 0, 0, 0,
+        0, 4, 0, 0, 0, 1, 0, 0, 0, 1, 0, 8, 0, 3,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 255, 0, 0, 0
+    };
+    return CreateMemoryStream(data, sizeof(data), stream);
+}
+
 int Fail(const char* message, HRESULT hr = E_FAIL)
 {
     std::printf("FAIL: %s (0x%08lx)\n", message, static_cast<unsigned long>(hr));
     return 1;
+}
+
+bool TransparentPixelBecameBackground(IStream* stream, const BackdropperSettings& settings)
+{
+    HBITMAP bitmap = nullptr;
+    WTS_ALPHATYPE alpha = WTSAT_UNKNOWN;
+    HRESULT hr = RenderBackdropperThumbnail(stream, 32, settings, &bitmap, &alpha);
+    if (FAILED(hr)) {
+        std::printf("FAIL: RenderBackdropperThumbnail (0x%08lx)\n", static_cast<unsigned long>(hr));
+        return false;
+    }
+
+    DIBSECTION section = {};
+    if (!GetObjectW(bitmap, sizeof(section), &section) || !section.dsBm.bmBits) {
+        DeleteObject(bitmap);
+        std::puts("FAIL: GetObject");
+        return false;
+    }
+
+    const BYTE* bits = static_cast<const BYTE*>(section.dsBm.bmBits);
+    const bool ok = bits[0] == 3 && bits[1] == 2 && bits[2] == 1 && bits[3] == 255;
+    DeleteObject(bitmap);
+    return ok;
 }
 
 }
@@ -105,28 +155,29 @@ int main()
     settings.checkerB = RGB(4, 5, 6);
     settings.checkerSize = 1;
 
-    HBITMAP bitmap = nullptr;
-    WTS_ALPHATYPE alpha = WTSAT_UNKNOWN;
-    hr = RenderBackdropperThumbnail(stream.Get(), 32, settings, &bitmap, &alpha);
+    const bool pngTransparentBecameBackground = TransparentPixelBecameBackground(stream.Get(), settings);
+
+    ComPtr<IStream> tga;
+    hr = CreateTgaStream(&tga);
     if (FAILED(hr)) {
         CoUninitialize();
-        return Fail("RenderBackdropperThumbnail", hr);
+        return Fail("CreateTgaStream", hr);
     }
+    const bool tgaTransparentBecameBackground = TransparentPixelBecameBackground(tga.Get(), settings);
 
-    DIBSECTION section = {};
-    if (!GetObjectW(bitmap, sizeof(section), &section) || !section.dsBm.bmBits) {
-        DeleteObject(bitmap);
+    ComPtr<IStream> psd;
+    hr = CreatePsdStream(&psd);
+    if (FAILED(hr)) {
         CoUninitialize();
-        return Fail("GetObject");
+        return Fail("CreatePsdStream", hr);
     }
-
-    const BYTE* bits = static_cast<const BYTE*>(section.dsBm.bmBits);
-    const bool transparentBecameBackground = bits[0] == 3 && bits[1] == 2 && bits[2] == 1 && bits[3] == 255;
-    DeleteObject(bitmap);
+    const bool psdTransparentBecameBackground = TransparentPixelBecameBackground(psd.Get(), settings);
 
     BYTE junk[] = { 1, 2, 3, 4 };
     ComPtr<IStream> bad;
     bad.Attach(SHCreateMemStream(junk, sizeof(junk)));
+    HBITMAP bitmap = nullptr;
+    WTS_ALPHATYPE alpha = WTSAT_UNKNOWN;
     hr = RenderBackdropperThumbnail(bad.Get(), 32, settings, &bitmap, &alpha);
     if (SUCCEEDED(hr)) {
         DeleteObject(bitmap);
@@ -135,10 +186,10 @@ int main()
     }
 
     CoUninitialize();
-    if (!transparentBecameBackground) {
+    if (!pngTransparentBecameBackground || !tgaTransparentBecameBackground || !psdTransparentBecameBackground) {
         return Fail("transparent pixel was not composited");
     }
 
-    std::puts("OK: PNG transparency composited, corrupt input rejected.");
+    std::puts("OK: PNG/TGA/PSD transparency composited, corrupt input rejected.");
     return 0;
 }

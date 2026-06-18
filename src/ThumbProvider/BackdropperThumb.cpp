@@ -154,6 +154,11 @@ bool WicSupportsExtension(const wchar_t* extension)
     return supported;
 }
 
+bool HasBuiltInFallbackRenderer(const wchar_t* extension)
+{
+    return wcscmp(extension, L".psd") == 0 || wcscmp(extension, L".tga") == 0;
+}
+
 void SavePreviousHandler(const wchar_t* extension)
 {
     HKEY backup = nullptr;
@@ -215,7 +220,7 @@ HRESULT RegisterServer()
 
     bool registeredAny = false;
     for (const wchar_t* extension : kExtensions) {
-        if (!WicSupportsExtension(extension)) {
+        if (!WicSupportsExtension(extension) && !HasBuiltInFallbackRenderer(extension)) {
             continue;
         }
 

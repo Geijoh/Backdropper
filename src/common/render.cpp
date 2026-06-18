@@ -4,11 +4,25 @@
 #include <wrl/client.h>
 
 #include <algorithm>
+#include <cstdint>
+#include <cstring>
+#include <limits>
 #include <vector>
 
 using Microsoft::WRL::ComPtr;
 
 namespace {
+
+#define RETURN_IF_FAILED(expr) do { HRESULT _hr = (expr); if (FAILED(_hr)) return _hr; } while (0)
+
+constexpr size_t kMaxInputBytes = 256ull * 1024ull * 1024ull;
+constexpr size_t kMaxDecodedBytes = 256ull * 1024ull * 1024ull;
+
+struct DecodedImage {
+    UINT width = 0;
+    UINT height = 0;
+    std::vector<BYTE> premultipliedBgra;
+};
 
 BYTE Blend(BYTE srcPremultiplied, BYTE bg, BYTE alpha)
 {
@@ -31,42 +45,311 @@ HRESULT CreateWicFactory(IWICImagingFactory** factory)
         IID_PPV_ARGS(factory));
 }
 
+BYTE Premultiply(BYTE value, BYTE alpha)
+{
+    return static_cast<BYTE>((static_cast<UINT>(value) * alpha + 127) / 255);
 }
 
-HRESULT RenderBackdropperThumbnail(IStream* stream, UINT maxSize, const BackdropperSettings& settings,
-    HBITMAP* bitmap, WTS_ALPHATYPE* alphaType)
+bool CheckedImageBytes(UINT width, UINT height, size_t* bytes)
 {
-    if (!stream || !bitmap || !alphaType || maxSize == 0) {
-        return E_INVALIDARG;
+    if (width == 0 || height == 0) {
+        return false;
     }
+    const uint64_t total = static_cast<uint64_t>(width) * height * 4;
+    if (total > kMaxDecodedBytes || total > std::numeric_limits<size_t>::max()) {
+        return false;
+    }
+    *bytes = static_cast<size_t>(total);
+    return true;
+}
 
-    *bitmap = nullptr;
-    *alphaType = WTSAT_UNKNOWN;
+uint16_t ReadLe16(const BYTE* data)
+{
+    return static_cast<uint16_t>(data[0] | (data[1] << 8));
+}
 
+uint16_t ReadBe16(const BYTE* data)
+{
+    return static_cast<uint16_t>((data[0] << 8) | data[1]);
+}
+
+uint32_t ReadBe32(const BYTE* data)
+{
+    return (static_cast<uint32_t>(data[0]) << 24)
+        | (static_cast<uint32_t>(data[1]) << 16)
+        | (static_cast<uint32_t>(data[2]) << 8)
+        | static_cast<uint32_t>(data[3]);
+}
+
+HRESULT ReadStreamBytes(IStream* stream, std::vector<BYTE>* bytes)
+{
+    bytes->clear();
     LARGE_INTEGER zero = {};
-    stream->Seek(zero, STREAM_SEEK_SET, nullptr);
+    RETURN_IF_FAILED(stream->Seek(zero, STREAM_SEEK_SET, nullptr));
 
-    ComPtr<IWICImagingFactory> factory;
-    HRESULT hr = CreateWicFactory(&factory);
-    if (FAILED(hr)) {
-        return hr;
+    STATSTG stat = {};
+    if (SUCCEEDED(stream->Stat(&stat, STATFLAG_NONAME)) && stat.cbSize.QuadPart > 0) {
+        if (static_cast<ULONGLONG>(stat.cbSize.QuadPart) > kMaxInputBytes) {
+            return HRESULT_FROM_WIN32(ERROR_FILE_TOO_LARGE);
+        }
+        bytes->reserve(static_cast<size_t>(stat.cbSize.QuadPart));
     }
 
-    ComPtr<IWICBitmapDecoder> decoder;
-    hr = factory->CreateDecoderFromStream(stream, nullptr, WICDecodeMetadataCacheOnDemand, &decoder);
-    if (FAILED(hr)) {
-        return hr;
+    BYTE chunk[64 * 1024] = {};
+    for (;;) {
+        ULONG read = 0;
+        HRESULT hr = stream->Read(chunk, sizeof(chunk), &read);
+        if (FAILED(hr)) {
+            return hr;
+        }
+        if (read == 0) {
+            break;
+        }
+        if (bytes->size() + read > kMaxInputBytes) {
+            return HRESULT_FROM_WIN32(ERROR_FILE_TOO_LARGE);
+        }
+        bytes->insert(bytes->end(), chunk, chunk + read);
+    }
+    return bytes->empty() ? E_FAIL : S_OK;
+}
+
+HRESULT DecodeTga(const std::vector<BYTE>& bytes, DecodedImage* image)
+{
+    if (bytes.size() < 18) {
+        return E_FAIL;
     }
 
-    ComPtr<IWICBitmapFrameDecode> frame;
-    hr = decoder->GetFrame(0, &frame);
-    if (FAILED(hr)) {
-        return hr;
+    const BYTE idLength = bytes[0];
+    const BYTE colorMapType = bytes[1];
+    const BYTE imageType = bytes[2];
+    const UINT width = ReadLe16(bytes.data() + 12);
+    const UINT height = ReadLe16(bytes.data() + 14);
+    const BYTE bitsPerPixel = bytes[16];
+    const BYTE descriptor = bytes[17];
+    const bool trueColor = imageType == 2 || imageType == 10;
+    const bool grayscale = imageType == 3 || imageType == 11;
+    const bool rle = imageType == 10 || imageType == 11;
+
+    size_t outBytes = 0;
+    if (colorMapType != 0 || (!trueColor && !grayscale) || !CheckedImageBytes(width, height, &outBytes)) {
+        return E_FAIL;
+    }
+    const UINT sourceBytesPerPixel = grayscale ? 1u : bitsPerPixel / 8u;
+    if ((!grayscale && sourceBytesPerPixel != 3 && sourceBytesPerPixel != 4) || (grayscale && bitsPerPixel != 8)) {
+        return E_FAIL;
     }
 
-    UINT sourceWidth = 0;
-    UINT sourceHeight = 0;
-    frame->GetSize(&sourceWidth, &sourceHeight);
+    size_t pos = 18 + idLength;
+    if (pos > bytes.size()) {
+        return E_FAIL;
+    }
+
+    image->width = width;
+    image->height = height;
+    image->premultipliedBgra.assign(outBytes, 0);
+
+    const uint64_t pixels = static_cast<uint64_t>(width) * height;
+    uint64_t pixelIndex = 0;
+    auto writePixel = [&](const BYTE* pixel) -> bool {
+        if (pixelIndex >= pixels) {
+            return false;
+        }
+        const UINT sourceY = static_cast<UINT>(pixelIndex / width);
+        const UINT x = static_cast<UINT>(pixelIndex % width);
+        const UINT y = (descriptor & 0x20) ? sourceY : (height - 1 - sourceY);
+        BYTE* out = image->premultipliedBgra.data() + ((static_cast<size_t>(y) * width + x) * 4);
+        const BYTE alpha = (trueColor && sourceBytesPerPixel == 4) ? pixel[3] : 255;
+        const BYTE blue = grayscale ? pixel[0] : pixel[0];
+        const BYTE green = grayscale ? pixel[0] : pixel[1];
+        const BYTE red = grayscale ? pixel[0] : pixel[2];
+        out[0] = Premultiply(blue, alpha);
+        out[1] = Premultiply(green, alpha);
+        out[2] = Premultiply(red, alpha);
+        out[3] = alpha;
+        ++pixelIndex;
+        return true;
+    };
+
+    if (!rle) {
+        const uint64_t needed = pixels * sourceBytesPerPixel;
+        if (needed > bytes.size() - pos) {
+            return E_FAIL;
+        }
+        while (pixelIndex < pixels) {
+            if (!writePixel(bytes.data() + pos)) {
+                return E_FAIL;
+            }
+            pos += sourceBytesPerPixel;
+        }
+        return S_OK;
+    }
+
+    while (pixelIndex < pixels && pos < bytes.size()) {
+        const BYTE packet = bytes[pos++];
+        const UINT count = (packet & 0x7f) + 1;
+        if (packet & 0x80) {
+            if (sourceBytesPerPixel > bytes.size() - pos) {
+                return E_FAIL;
+            }
+            for (UINT i = 0; i < count; ++i) {
+                if (!writePixel(bytes.data() + pos)) {
+                    return E_FAIL;
+                }
+            }
+            pos += sourceBytesPerPixel;
+        } else {
+            const uint64_t needed = static_cast<uint64_t>(count) * sourceBytesPerPixel;
+            if (needed > bytes.size() - pos) {
+                return E_FAIL;
+            }
+            for (UINT i = 0; i < count; ++i) {
+                if (!writePixel(bytes.data() + pos)) {
+                    return E_FAIL;
+                }
+                pos += sourceBytesPerPixel;
+            }
+        }
+    }
+    return pixelIndex == pixels ? S_OK : E_FAIL;
+}
+
+HRESULT DecodePackBitsRow(const BYTE* input, size_t inputSize, BYTE* output, size_t outputSize)
+{
+    size_t in = 0;
+    size_t out = 0;
+    while (out < outputSize && in < inputSize) {
+        const int8_t n = static_cast<int8_t>(input[in++]);
+        if (n >= 0) {
+            const size_t count = static_cast<size_t>(n) + 1;
+            if (count > inputSize - in || count > outputSize - out) {
+                return E_FAIL;
+            }
+            memcpy(output + out, input + in, count);
+            in += count;
+            out += count;
+        } else if (n != -128) {
+            const size_t count = static_cast<size_t>(1 - n);
+            if (in >= inputSize || count > outputSize - out) {
+                return E_FAIL;
+            }
+            memset(output + out, input[in++], count);
+            out += count;
+        }
+    }
+    return out == outputSize ? S_OK : E_FAIL;
+}
+
+HRESULT DecodePsd(const std::vector<BYTE>& bytes, DecodedImage* image)
+{
+    if (bytes.size() < 28 || memcmp(bytes.data(), "8BPS", 4) != 0 || ReadBe16(bytes.data() + 4) != 1) {
+        return E_FAIL;
+    }
+
+    const UINT channels = ReadBe16(bytes.data() + 12);
+    const UINT height = ReadBe32(bytes.data() + 14);
+    const UINT width = ReadBe32(bytes.data() + 18);
+    const UINT depth = ReadBe16(bytes.data() + 22);
+    const UINT colorMode = ReadBe16(bytes.data() + 24);
+    const bool grayscale = colorMode == 1;
+    const bool rgb = colorMode == 3;
+
+    size_t outBytes = 0;
+    if (channels == 0 || channels > 8 || depth != 8 || (!grayscale && !rgb)
+        || (rgb && channels < 3) || !CheckedImageBytes(width, height, &outBytes)) {
+        return E_FAIL;
+    }
+
+    size_t pos = 26;
+    for (int block = 0; block < 3; ++block) {
+        if (bytes.size() - pos < 4) {
+            return E_FAIL;
+        }
+        const uint32_t length = ReadBe32(bytes.data() + pos);
+        pos += 4;
+        if (length > bytes.size() - pos) {
+            return E_FAIL;
+        }
+        pos += length;
+    }
+    if (bytes.size() - pos < 2) {
+        return E_FAIL;
+    }
+    const UINT compression = ReadBe16(bytes.data() + pos);
+    pos += 2;
+
+    const size_t pixels = static_cast<size_t>(width) * height;
+    if (pixels > kMaxDecodedBytes || channels > kMaxDecodedBytes / pixels) {
+        return HRESULT_FROM_WIN32(ERROR_FILE_TOO_LARGE);
+    }
+    std::vector<BYTE> channelData(pixels * channels);
+
+    if (compression == 0) {
+        const size_t needed = channelData.size();
+        if (needed > bytes.size() - pos) {
+            return E_FAIL;
+        }
+        memcpy(channelData.data(), bytes.data() + pos, needed);
+    } else if (compression == 1) {
+        const size_t rowCount = static_cast<size_t>(channels) * height;
+        if (rowCount > (bytes.size() - pos) / 2) {
+            return E_FAIL;
+        }
+        std::vector<uint16_t> rowBytes(rowCount);
+        for (size_t i = 0; i < rowCount; ++i) {
+            rowBytes[i] = ReadBe16(bytes.data() + pos);
+            pos += 2;
+        }
+        for (UINT channel = 0; channel < channels; ++channel) {
+            for (UINT y = 0; y < height; ++y) {
+                const size_t row = static_cast<size_t>(channel) * height + y;
+                const size_t compressed = rowBytes[row];
+                if (compressed > bytes.size() - pos) {
+                    return E_FAIL;
+                }
+                BYTE* output = channelData.data() + (static_cast<size_t>(channel) * pixels) + (static_cast<size_t>(y) * width);
+                RETURN_IF_FAILED(DecodePackBitsRow(bytes.data() + pos, compressed, output, width));
+                pos += compressed;
+            }
+        }
+    } else {
+        return E_FAIL;
+    }
+
+    image->width = width;
+    image->height = height;
+    image->premultipliedBgra.assign(outBytes, 0);
+    const BYTE* c0 = channelData.data();
+    const BYTE* c1 = channels > 1 ? c0 + pixels : nullptr;
+    const BYTE* c2 = channels > 2 ? c1 + pixels : nullptr;
+    const BYTE* alphaChannel = grayscale ? (channels > 1 ? c1 : nullptr) : (channels > 3 ? c2 + pixels : nullptr);
+
+    for (size_t i = 0; i < pixels; ++i) {
+        const BYTE alpha = alphaChannel ? alphaChannel[i] : 255;
+        const BYTE red = grayscale ? c0[i] : c0[i];
+        const BYTE green = grayscale ? c0[i] : c1[i];
+        const BYTE blue = grayscale ? c0[i] : c2[i];
+        BYTE* out = image->premultipliedBgra.data() + (i * 4);
+        out[0] = Premultiply(blue, alpha);
+        out[1] = Premultiply(green, alpha);
+        out[2] = Premultiply(red, alpha);
+        out[3] = alpha;
+    }
+    return S_OK;
+}
+
+HRESULT DecodeFallbackImage(IStream* stream, DecodedImage* image)
+{
+    std::vector<BYTE> bytes;
+    RETURN_IF_FAILED(ReadStreamBytes(stream, &bytes));
+    if (SUCCEEDED(DecodeTga(bytes, image))) {
+        return S_OK;
+    }
+    return DecodePsd(bytes, image);
+}
+
+HRESULT RenderWicSource(IWICImagingFactory* factory, IWICBitmapSource* source, UINT sourceWidth, UINT sourceHeight,
+    UINT maxSize, const BackdropperSettings& settings, HBITMAP* bitmap, WTS_ALPHATYPE* alphaType)
+{
     if (sourceWidth == 0 || sourceHeight == 0) {
         return E_FAIL;
     }
@@ -75,27 +358,27 @@ HRESULT RenderBackdropperThumbnail(IStream* stream, UINT maxSize, const Backdrop
     const UINT width = std::max(1u, static_cast<UINT>(sourceWidth * scale));
     const UINT height = std::max(1u, static_cast<UINT>(sourceHeight * scale));
 
-    ComPtr<IWICBitmapSource> source = frame;
+    ComPtr<IWICBitmapSource> scaledSource = source;
     ComPtr<IWICBitmapScaler> scaler;
     if (width != sourceWidth || height != sourceHeight) {
-        hr = factory->CreateBitmapScaler(&scaler);
+        HRESULT hr = factory->CreateBitmapScaler(&scaler);
         if (FAILED(hr)) {
             return hr;
         }
-        hr = scaler->Initialize(frame.Get(), width, height, WICBitmapInterpolationModeFant);
+        hr = scaler->Initialize(source, width, height, WICBitmapInterpolationModeFant);
         if (FAILED(hr)) {
             return hr;
         }
-        source = scaler;
+        scaledSource = scaler;
     }
 
     ComPtr<IWICFormatConverter> converter;
-    hr = factory->CreateFormatConverter(&converter);
+    HRESULT hr = factory->CreateFormatConverter(&converter);
     if (FAILED(hr)) {
         return hr;
     }
 
-    hr = converter->Initialize(source.Get(), GUID_WICPixelFormat32bppPBGRA,
+    hr = converter->Initialize(scaledSource.Get(), GUID_WICPixelFormat32bppPBGRA,
         WICBitmapDitherTypeNone, nullptr, 0.0, WICBitmapPaletteTypeCustom);
     if (FAILED(hr)) {
         return hr;
@@ -142,4 +425,55 @@ HRESULT RenderBackdropperThumbnail(IStream* stream, UINT maxSize, const Backdrop
     memcpy(bits, pixels.data(), pixels.size());
     *bitmap = dib;
     return S_OK;
+}
+
+}
+
+HRESULT RenderBackdropperThumbnail(IStream* stream, UINT maxSize, const BackdropperSettings& settings,
+    HBITMAP* bitmap, WTS_ALPHATYPE* alphaType)
+{
+    if (!stream || !bitmap || !alphaType || maxSize == 0) {
+        return E_INVALIDARG;
+    }
+
+    *bitmap = nullptr;
+    *alphaType = WTSAT_UNKNOWN;
+
+    LARGE_INTEGER zero = {};
+    stream->Seek(zero, STREAM_SEEK_SET, nullptr);
+
+    ComPtr<IWICImagingFactory> factory;
+    HRESULT hr = CreateWicFactory(&factory);
+    if (FAILED(hr)) {
+        return hr;
+    }
+
+    ComPtr<IWICBitmapDecoder> decoder;
+    hr = factory->CreateDecoderFromStream(stream, nullptr, WICDecodeMetadataCacheOnDemand, &decoder);
+    if (SUCCEEDED(hr)) {
+        ComPtr<IWICBitmapFrameDecode> frame;
+        hr = decoder->GetFrame(0, &frame);
+        if (FAILED(hr)) {
+            return hr;
+        }
+
+        UINT sourceWidth = 0;
+        UINT sourceHeight = 0;
+        frame->GetSize(&sourceWidth, &sourceHeight);
+        if (sourceWidth == 0 || sourceHeight == 0) {
+            return E_FAIL;
+        }
+        return RenderWicSource(factory.Get(), frame.Get(), sourceWidth, sourceHeight, maxSize, settings, bitmap, alphaType);
+    }
+
+    DecodedImage decoded;
+    RETURN_IF_FAILED(DecodeFallbackImage(stream, &decoded));
+    ComPtr<IWICBitmap> fallbackSource;
+    const UINT stride = decoded.width * 4;
+    hr = factory->CreateBitmapFromMemory(decoded.width, decoded.height, GUID_WICPixelFormat32bppPBGRA,
+        stride, static_cast<UINT>(decoded.premultipliedBgra.size()), decoded.premultipliedBgra.data(), &fallbackSource);
+    if (FAILED(hr)) {
+        return hr;
+    }
+    return RenderWicSource(factory.Get(), fallbackSource.Get(), decoded.width, decoded.height, maxSize, settings, bitmap, alphaType);
 }
