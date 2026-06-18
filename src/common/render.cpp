@@ -1,5 +1,17 @@
 #include "render.h"
 
+#include <d2d1_3.h>
+#include <d3d11.h>
+#include <dxgi1_2.h>
+#include <roapi.h>
+#include <shcore.h>
+#include <shlwapi.h>
+#include <winrt/base.h>
+#include <winrt/Windows.Data.Pdf.h>
+#include <winrt/Windows.Foundation.h>
+#include <winrt/Windows.Graphics.Imaging.h>
+#include <winrt/Windows.Storage.Streams.h>
+#include <winrt/Windows.UI.h>
 #include <wincodec.h>
 #include <wrl/client.h>
 
@@ -7,6 +19,7 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <string>
 #include <vector>
 
 using Microsoft::WRL::ComPtr;
@@ -111,6 +124,49 @@ HRESULT ReadStreamBytes(IStream* stream, std::vector<BYTE>* bytes)
         bytes->insert(bytes->end(), chunk, chunk + read);
     }
     return bytes->empty() ? E_FAIL : S_OK;
+}
+
+ComPtr<IStream> StreamFromBytes(const std::vector<BYTE>& bytes)
+{
+    ComPtr<IStream> stream;
+    stream.Attach(SHCreateMemStream(bytes.data(), static_cast<UINT>(bytes.size())));
+    return stream;
+}
+
+HRESULT DecodeWicStream(IWICImagingFactory* factory, IStream* stream, DecodedImage* image)
+{
+    LARGE_INTEGER zero = {};
+    RETURN_IF_FAILED(stream->Seek(zero, STREAM_SEEK_SET, nullptr));
+
+    ComPtr<IWICBitmapDecoder> decoder;
+    RETURN_IF_FAILED(factory->CreateDecoderFromStream(stream, nullptr, WICDecodeMetadataCacheOnDemand, &decoder));
+
+    ComPtr<IWICBitmapFrameDecode> frame;
+    RETURN_IF_FAILED(decoder->GetFrame(0, &frame));
+
+    UINT width = 0;
+    UINT height = 0;
+    frame->GetSize(&width, &height);
+    size_t outBytes = 0;
+    if (!CheckedImageBytes(width, height, &outBytes)) {
+        return E_FAIL;
+    }
+
+    ComPtr<IWICFormatConverter> converter;
+    RETURN_IF_FAILED(factory->CreateFormatConverter(&converter));
+    RETURN_IF_FAILED(converter->Initialize(frame.Get(), GUID_WICPixelFormat32bppPBGRA,
+        WICBitmapDitherTypeNone, nullptr, 0.0, WICBitmapPaletteTypeCustom));
+
+    image->width = width;
+    image->height = height;
+    image->premultipliedBgra.resize(outBytes);
+    return converter->CopyPixels(nullptr, width * 4, static_cast<UINT>(outBytes), image->premultipliedBgra.data());
+}
+
+HRESULT DecodeWicBytes(IWICImagingFactory* factory, const std::vector<BYTE>& bytes, DecodedImage* image)
+{
+    ComPtr<IStream> stream = StreamFromBytes(bytes);
+    return stream ? DecodeWicStream(factory, stream.Get(), image) : E_OUTOFMEMORY;
 }
 
 HRESULT DecodeTga(const std::vector<BYTE>& bytes, DecodedImage* image)
@@ -337,14 +393,384 @@ HRESULT DecodePsd(const std::vector<BYTE>& bytes, DecodedImage* image)
     return S_OK;
 }
 
-HRESULT DecodeFallbackImage(IStream* stream, DecodedImage* image)
+template <typename Draw>
+HRESULT RenderD2D(UINT width, UINT height, Draw draw, DecodedImage* image)
+{
+    size_t outBytes = 0;
+    if (!CheckedImageBytes(width, height, &outBytes)) {
+        return E_FAIL;
+    }
+
+    UINT flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
+#if defined(_DEBUG)
+    flags |= D3D11_CREATE_DEVICE_DEBUG;
+#endif
+    D3D_FEATURE_LEVEL levels[] = { D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_10_1 };
+    ComPtr<ID3D11Device> d3dDevice;
+    ComPtr<ID3D11DeviceContext> d3dContext;
+    HRESULT hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, flags,
+        levels, ARRAYSIZE(levels), D3D11_SDK_VERSION, &d3dDevice, nullptr, &d3dContext);
+    if (FAILED(hr)) {
+        hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, flags,
+            levels, ARRAYSIZE(levels), D3D11_SDK_VERSION, &d3dDevice, nullptr, &d3dContext);
+    }
+    if (FAILED(hr)) {
+        return hr;
+    }
+
+    ComPtr<IDXGIDevice> dxgiDevice;
+    RETURN_IF_FAILED(d3dDevice.As(&dxgiDevice));
+
+    ComPtr<ID2D1Factory1> d2dFactory;
+    RETURN_IF_FAILED(D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, IID_PPV_ARGS(&d2dFactory)));
+
+    ComPtr<ID2D1Device> d2dDevice;
+    RETURN_IF_FAILED(d2dFactory->CreateDevice(dxgiDevice.Get(), &d2dDevice));
+
+    ComPtr<ID2D1DeviceContext> baseContext;
+    RETURN_IF_FAILED(d2dDevice->CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE, &baseContext));
+
+    ComPtr<ID2D1DeviceContext5> context;
+    RETURN_IF_FAILED(baseContext.As(&context));
+
+    D3D11_TEXTURE2D_DESC textureDesc = {};
+    textureDesc.Width = width;
+    textureDesc.Height = height;
+    textureDesc.MipLevels = 1;
+    textureDesc.ArraySize = 1;
+    textureDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    textureDesc.SampleDesc.Count = 1;
+    textureDesc.Usage = D3D11_USAGE_DEFAULT;
+    textureDesc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+
+    ComPtr<ID3D11Texture2D> texture;
+    RETURN_IF_FAILED(d3dDevice->CreateTexture2D(&textureDesc, nullptr, &texture));
+
+    ComPtr<IDXGISurface> surface;
+    RETURN_IF_FAILED(texture.As(&surface));
+
+    D2D1_BITMAP_PROPERTIES1 props = D2D1::BitmapProperties1(
+        D2D1_BITMAP_OPTIONS_TARGET,
+        D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED));
+    ComPtr<ID2D1Bitmap1> target;
+    RETURN_IF_FAILED(context->CreateBitmapFromDxgiSurface(surface.Get(), &props, &target));
+
+    context->SetTarget(target.Get());
+    context->BeginDraw();
+    context->Clear(D2D1::ColorF(0, 0.0f));
+    hr = draw(context.Get());
+    HRESULT endHr = context->EndDraw();
+    if (FAILED(hr)) {
+        return hr;
+    }
+    if (FAILED(endHr)) {
+        return endHr;
+    }
+
+    D3D11_TEXTURE2D_DESC stagingDesc = textureDesc;
+    stagingDesc.Usage = D3D11_USAGE_STAGING;
+    stagingDesc.BindFlags = 0;
+    stagingDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    ComPtr<ID3D11Texture2D> staging;
+    RETURN_IF_FAILED(d3dDevice->CreateTexture2D(&stagingDesc, nullptr, &staging));
+    d3dContext->CopyResource(staging.Get(), texture.Get());
+
+    D3D11_MAPPED_SUBRESOURCE mapped = {};
+    RETURN_IF_FAILED(d3dContext->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &mapped));
+
+    image->width = width;
+    image->height = height;
+    image->premultipliedBgra.resize(outBytes);
+    const BYTE* src = static_cast<const BYTE*>(mapped.pData);
+    BYTE* dst = image->premultipliedBgra.data();
+    const UINT stride = width * 4;
+    for (UINT y = 0; y < height; ++y) {
+        memcpy(dst + (static_cast<size_t>(y) * stride), src + (static_cast<size_t>(y) * mapped.RowPitch), stride);
+    }
+    d3dContext->Unmap(staging.Get(), 0);
+    return S_OK;
+}
+
+HRESULT DecodeSvg(const std::vector<BYTE>& bytes, UINT maxSize, DecodedImage* image)
+{
+    ComPtr<IStream> stream = StreamFromBytes(bytes);
+    if (!stream) {
+        return E_OUTOFMEMORY;
+    }
+
+    const UINT size = std::max(1u, maxSize);
+    return RenderD2D(size, size, [&](ID2D1DeviceContext5* context) -> HRESULT {
+        ComPtr<ID2D1SvgDocument> document;
+        RETURN_IF_FAILED(context->CreateSvgDocument(stream.Get(), D2D1::SizeF(static_cast<float>(size), static_cast<float>(size)), &document));
+        context->DrawSvgDocument(document.Get());
+        return S_OK;
+    }, image);
+}
+
+class RoInitializeScope {
+public:
+    RoInitializeScope()
+        : hr_(RoInitialize(RO_INIT_SINGLETHREADED))
+        , uninitialize_(hr_ == S_OK || hr_ == S_FALSE)
+    {
+        if (hr_ == RPC_E_CHANGED_MODE) {
+            hr_ = S_OK;
+        }
+    }
+
+    ~RoInitializeScope()
+    {
+        if (uninitialize_) {
+            RoUninitialize();
+        }
+    }
+
+    HRESULT Result() const { return hr_; }
+
+private:
+    HRESULT hr_;
+    bool uninitialize_;
+};
+
+HRESULT DecodePdf(IWICImagingFactory* factory, const std::vector<BYTE>& bytes, UINT maxSize, DecodedImage* image)
+{
+    try {
+        RoInitializeScope ro;
+        RETURN_IF_FAILED(ro.Result());
+
+        ComPtr<IStream> baseStream = StreamFromBytes(bytes);
+        if (!baseStream) {
+            return E_OUTOFMEMORY;
+        }
+        auto inputStream = winrt::capture<winrt::Windows::Storage::Streams::IRandomAccessStream>(
+            CreateRandomAccessStreamOverStream, baseStream.Get(), BSOS_DEFAULT);
+        auto document = winrt::Windows::Data::Pdf::PdfDocument::LoadFromStreamAsync(inputStream).get();
+        if (!document || document.PageCount() == 0) {
+            return E_FAIL;
+        }
+
+        auto page = document.GetPage(0);
+        const auto size = page.Size();
+        const double pageWidth = std::max(1.0, static_cast<double>(size.Width));
+        const double pageHeight = std::max(1.0, static_cast<double>(size.Height));
+        const double scale = static_cast<double>(std::max(1u, maxSize)) / std::max(pageWidth, pageHeight);
+        const uint32_t width = std::max(1u, static_cast<uint32_t>(pageWidth * scale));
+        const uint32_t height = std::max(1u, static_cast<uint32_t>(pageHeight * scale));
+
+        winrt::Windows::Data::Pdf::PdfPageRenderOptions options;
+        options.DestinationWidth(width);
+        options.DestinationHeight(height);
+        options.BitmapEncoderId(winrt::Windows::Graphics::Imaging::BitmapEncoder::PngEncoderId());
+        options.BackgroundColor(winrt::Windows::UI::Color{ 0, 255, 255, 255 });
+        options.IsIgnoringHighContrast(true);
+
+        winrt::Windows::Storage::Streams::InMemoryRandomAccessStream output;
+        page.RenderToStreamAsync(output, options).get();
+        const uint64_t renderedSize = output.Size();
+        if (renderedSize == 0 || renderedSize > kMaxInputBytes) {
+            return E_FAIL;
+        }
+
+        std::vector<BYTE> rendered(static_cast<size_t>(renderedSize));
+        auto reader = winrt::Windows::Storage::Streams::DataReader(output.GetInputStreamAt(0));
+        reader.LoadAsync(static_cast<uint32_t>(rendered.size())).get();
+        reader.ReadBytes(rendered);
+        reader.Close();
+        page.Close();
+        output.Close();
+        return DecodeWicBytes(factory, rendered, image);
+    } catch (const winrt::hresult_error& error) {
+        return error.code();
+    } catch (...) {
+        return E_FAIL;
+    }
+}
+
+bool LooksPostScript(const std::vector<BYTE>& bytes)
+{
+    if (bytes.size() >= 4 && memcmp(bytes.data(), "%!PS", 4) == 0) {
+        return true;
+    }
+    return bytes.size() >= 4 && bytes[0] == 0xC5 && bytes[1] == 0xD0 && bytes[2] == 0xD3 && bytes[3] == 0xC6;
+}
+
+bool LooksPdf(const std::vector<BYTE>& bytes)
+{
+    return bytes.size() >= 4 && memcmp(bytes.data(), "%PDF", 4) == 0;
+}
+
+bool LooksSvg(const std::vector<BYTE>& bytes)
+{
+    const size_t limit = std::min<size_t>(bytes.size(), 1024);
+    std::string head;
+    head.reserve(limit);
+    for (size_t i = 0; i < limit; ++i) {
+        const char ch = static_cast<char>(bytes[i]);
+        head.push_back(ch >= 'A' && ch <= 'Z' ? static_cast<char>(ch + 32) : ch);
+    }
+    return head.find("<svg") != std::string::npos;
+}
+
+std::wstring FindGhostscript()
+{
+    wchar_t path[MAX_PATH] = {};
+    if (SearchPathW(nullptr, L"gswin64c.exe", nullptr, ARRAYSIZE(path), path, nullptr)) {
+        return path;
+    }
+    if (SearchPathW(nullptr, L"gswin32c.exe", nullptr, ARRAYSIZE(path), path, nullptr)) {
+        return path;
+    }
+
+    auto findUnder = [](const wchar_t* base, const wchar_t* exe) -> std::wstring {
+        std::wstring pattern = std::wstring(base) + L"\\gs*";
+        WIN32_FIND_DATAW data = {};
+        HANDLE find = FindFirstFileW(pattern.c_str(), &data);
+        while (find != INVALID_HANDLE_VALUE) {
+            if ((data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && wcscmp(data.cFileName, L".") != 0 && wcscmp(data.cFileName, L"..") != 0) {
+                std::wstring candidate = std::wstring(base) + L"\\" + data.cFileName + L"\\bin\\" + exe;
+                if (GetFileAttributesW(candidate.c_str()) != INVALID_FILE_ATTRIBUTES) {
+                    FindClose(find);
+                    return candidate;
+                }
+            }
+            if (!FindNextFileW(find, &data)) {
+                break;
+            }
+        }
+        if (find != INVALID_HANDLE_VALUE) {
+            FindClose(find);
+        }
+        return {};
+    };
+
+    for (const auto& candidate : {
+        findUnder(L"C:\\Program Files\\gs", L"gswin64c.exe"),
+        findUnder(L"C:\\Program Files (x86)\\gs", L"gswin32c.exe") }) {
+        if (!candidate.empty()) {
+            return candidate;
+        }
+    }
+    return {};
+}
+
+std::wstring Quote(const std::wstring& value)
+{
+    return L"\"" + value + L"\"";
+}
+
+HRESULT ReadFileBytes(const std::wstring& path, std::vector<BYTE>* bytes)
+{
+    HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        return HRESULT_FROM_WIN32(GetLastError());
+    }
+    LARGE_INTEGER size = {};
+    if (!GetFileSizeEx(file, &size) || size.QuadPart <= 0 || static_cast<ULONGLONG>(size.QuadPart) > kMaxInputBytes) {
+        CloseHandle(file);
+        return E_FAIL;
+    }
+    bytes->resize(static_cast<size_t>(size.QuadPart));
+    DWORD read = 0;
+    const BOOL ok = ReadFile(file, bytes->data(), static_cast<DWORD>(bytes->size()), &read, nullptr);
+    CloseHandle(file);
+    return ok && read == bytes->size() ? S_OK : HRESULT_FROM_WIN32(GetLastError());
+}
+
+HRESULT WriteFileBytes(const std::wstring& path, const std::vector<BYTE>& bytes)
+{
+    HANDLE file = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_TEMPORARY, nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        return HRESULT_FROM_WIN32(GetLastError());
+    }
+    DWORD written = 0;
+    const BOOL ok = WriteFile(file, bytes.data(), static_cast<DWORD>(bytes.size()), &written, nullptr);
+    CloseHandle(file);
+    return ok && written == bytes.size() ? S_OK : HRESULT_FROM_WIN32(GetLastError());
+}
+
+HRESULT DecodePostScriptWithGhostscript(IWICImagingFactory* factory, const std::vector<BYTE>& bytes, UINT maxSize, DecodedImage* image)
+{
+    if (!LooksPostScript(bytes)) {
+        return E_FAIL;
+    }
+
+    const std::wstring gs = FindGhostscript();
+    if (gs.empty()) {
+        return E_FAIL;
+    }
+
+    wchar_t tempDir[MAX_PATH] = {};
+    if (!GetTempPathW(ARRAYSIZE(tempDir), tempDir)) {
+        return HRESULT_FROM_WIN32(GetLastError());
+    }
+    wchar_t tempFile[MAX_PATH] = {};
+    if (!GetTempFileNameW(tempDir, L"bdp", 0, tempFile)) {
+        return HRESULT_FROM_WIN32(GetLastError());
+    }
+
+    const std::wstring input = std::wstring(tempFile) + L".eps";
+    const std::wstring output = std::wstring(tempFile) + L".png";
+    MoveFileW(tempFile, input.c_str());
+
+    HRESULT hr = WriteFileBytes(input, bytes);
+    if (SUCCEEDED(hr)) {
+        const UINT size = std::max(1u, maxSize);
+        std::wstring command = Quote(gs)
+            + L" -dSAFER -dBATCH -dNOPAUSE -dNOPROMPT -dQUIET -dFirstPage=1 -dLastPage=1 -dEPSCrop"
+            + L" -sDEVICE=pngalpha -dGraphicsAlphaBits=4 -dTextAlphaBits=4"
+            + L" -g" + std::to_wstring(size) + L"x" + std::to_wstring(size)
+            + L" -sOutputFile=" + Quote(output) + L" " + Quote(input);
+
+        STARTUPINFOW startup = {};
+        startup.cb = sizeof(startup);
+        PROCESS_INFORMATION process = {};
+        if (CreateProcessW(nullptr, command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &startup, &process)) {
+            const DWORD wait = WaitForSingleObject(process.hProcess, 10000);
+            DWORD exitCode = 1;
+            GetExitCodeProcess(process.hProcess, &exitCode);
+            if (wait == WAIT_TIMEOUT) {
+                TerminateProcess(process.hProcess, 1);
+                hr = HRESULT_FROM_WIN32(WAIT_TIMEOUT);
+            } else if (wait != WAIT_OBJECT_0 || exitCode != 0) {
+                hr = E_FAIL;
+            }
+            CloseHandle(process.hThread);
+            CloseHandle(process.hProcess);
+        } else {
+            hr = HRESULT_FROM_WIN32(GetLastError());
+        }
+    }
+
+    if (SUCCEEDED(hr)) {
+        std::vector<BYTE> png;
+        hr = ReadFileBytes(output, &png);
+        if (SUCCEEDED(hr)) {
+            hr = DecodeWicBytes(factory, png, image);
+        }
+    }
+
+    DeleteFileW(input.c_str());
+    DeleteFileW(output.c_str());
+    return hr;
+}
+
+HRESULT DecodeFallbackImage(IWICImagingFactory* factory, IStream* stream, UINT maxSize, DecodedImage* image)
 {
     std::vector<BYTE> bytes;
     RETURN_IF_FAILED(ReadStreamBytes(stream, &bytes));
     if (SUCCEEDED(DecodeTga(bytes, image))) {
         return S_OK;
     }
-    return DecodePsd(bytes, image);
+    if (SUCCEEDED(DecodePsd(bytes, image))) {
+        return S_OK;
+    }
+    if (LooksSvg(bytes) && SUCCEEDED(DecodeSvg(bytes, maxSize, image))) {
+        return S_OK;
+    }
+    if (LooksPdf(bytes) && SUCCEEDED(DecodePdf(factory, bytes, maxSize, image))) {
+        return S_OK;
+    }
+    return DecodePostScriptWithGhostscript(factory, bytes, maxSize, image);
 }
 
 HRESULT RenderWicSource(IWICImagingFactory* factory, IWICBitmapSource* source, UINT sourceWidth, UINT sourceHeight,
@@ -467,7 +893,7 @@ HRESULT RenderBackdropperThumbnail(IStream* stream, UINT maxSize, const Backdrop
     }
 
     DecodedImage decoded;
-    RETURN_IF_FAILED(DecodeFallbackImage(stream, &decoded));
+    RETURN_IF_FAILED(DecodeFallbackImage(factory.Get(), stream, maxSize, &decoded));
     ComPtr<IWICBitmap> fallbackSource;
     const UINT stride = decoded.width * 4;
     hr = factory->CreateBitmapFromMemory(decoded.width, decoded.height, GUID_WICPixelFormat32bppPBGRA,

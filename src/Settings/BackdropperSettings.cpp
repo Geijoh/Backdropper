@@ -944,10 +944,10 @@ struct FileItem {
 constexpr std::array<FileItem, 6> kFiles = { {
     { L"app-logo.png", L"PNG File", L"48 KB", L"6/14/2026 9:21 AM" },
     { L"cloud.webp", L"WEBP File", L"22 KB", L"6/12/2026 4:03 PM" },
-    { L"texture.tga", L"TGA File", L"31 KB", L"6/9/2026 11:47 AM" },
-    { L"avatar.avif", L"AVIF File", L"64 KB", L"5/30/2026 2:15 PM" },
+    { L"star-sticker.svg", L"SVG File", L"31 KB", L"6/9/2026 11:47 AM" },
+    { L"wordmark.pdf", L"PDF File", L"64 KB", L"5/30/2026 2:15 PM" },
     { L"poster.psd", L"PSD File", L"18 KB", L"5/28/2026 8:52 AM" },
-    { L"verified-badge.ico", L"ICO File", L"27 KB", L"5/21/2026 6:30 PM" },
+    { L"texture.tga", L"TGA File", L"27 KB", L"5/21/2026 6:30 PM" },
 } };
 
 std::wstring ViewLabel(ViewMode view)
@@ -1607,7 +1607,7 @@ void ActivateHit(HWND window, Hit hit)
             const bool ok = RunRegsvr(window, false);
             g_state.registered = IsBackdropperHandlerRegistered();
             OpenDialog(window, ok ? L"Registered image handlers" : L"Registration failed",
-                ok ? L"Backdropper is now the per-user Shell thumbnail handler for requested formats with an installed WIC decoder or built-in fallback."
+                ok ? L"Backdropper is now the per-user Shell thumbnail handler for requested formats with WIC, native, or optional Ghostscript rendering."
                    : L"regsvr32 could not register BackdropperThumb.dll.");
         }
         break;

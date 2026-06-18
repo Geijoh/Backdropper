@@ -5,6 +5,8 @@
 #include <wrl/client.h>
 
 #include <cstdio>
+#include <string>
+#include <vector>
 
 using Microsoft::WRL::ComPtr;
 
@@ -79,8 +81,23 @@ HRESULT CreatePngStream(IStream** stream)
 
 HRESULT CreateMemoryStream(const BYTE* data, UINT size, IStream** stream)
 {
-    *stream = SHCreateMemStream(data, size);
-    return *stream ? S_OK : E_OUTOFMEMORY;
+    *stream = nullptr;
+    HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, size);
+    if (!memory) {
+        return E_OUTOFMEMORY;
+    }
+    void* dest = GlobalLock(memory);
+    if (!dest) {
+        GlobalFree(memory);
+        return HRESULT_FROM_WIN32(GetLastError());
+    }
+    memcpy(dest, data, size);
+    GlobalUnlock(memory);
+    HRESULT hr = CreateStreamOnHGlobal(memory, TRUE, stream);
+    if (FAILED(hr)) {
+        GlobalFree(memory);
+    }
+    return hr;
 }
 
 HRESULT CreateTgaStream(IStream** stream)
@@ -102,6 +119,43 @@ HRESULT CreatePsdStream(IStream** stream)
         0, 0, 255, 0, 0, 0
     };
     return CreateMemoryStream(data, sizeof(data), stream);
+}
+
+HRESULT CreateSvgStream(IStream** stream)
+{
+    static constexpr char svg[] =
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"2\" height=\"2\" viewBox=\"0 0 2 2\">"
+        "<rect x=\"1\" y=\"0\" width=\"1\" height=\"2\" fill=\"red\"/>"
+        "</svg>";
+    return CreateMemoryStream(reinterpret_cast<const BYTE*>(svg), sizeof(svg) - 1, stream);
+}
+
+HRESULT CreatePdfStream(IStream** stream)
+{
+    std::string pdf = "%PDF-1.4\n";
+    std::vector<size_t> offsets(5);
+    auto object = [&](int id, const std::string& body) {
+        offsets[id] = pdf.size();
+        pdf += std::to_string(id) + " 0 obj\n" + body + "\nendobj\n";
+    };
+
+    object(1, "<< /Type /Catalog /Pages 2 0 R >>");
+    object(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
+    object(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 2 2] /Resources << >> /Contents 4 0 R >>");
+    const std::string commands = "1 0 0 rg 1 0 1 2 re f\n";
+    offsets[4] = pdf.size();
+    pdf += "4 0 obj\n<< /Length " + std::to_string(commands.size()) + " >>\nstream\n"
+        + commands + "endstream\nendobj\n";
+
+    const size_t xref = pdf.size();
+    pdf += "xref\n0 5\n0000000000 65535 f \n";
+    for (int i = 1; i <= 4; ++i) {
+        char line[32] = {};
+        sprintf_s(line, "%010zu 00000 n \n", offsets[i]);
+        pdf += line;
+    }
+    pdf += "trailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n" + std::to_string(xref) + "\n%%EOF\n";
+    return CreateMemoryStream(reinterpret_cast<const BYTE*>(pdf.data()), static_cast<UINT>(pdf.size()), stream);
 }
 
 int Fail(const char* message, HRESULT hr = E_FAIL)
@@ -131,6 +185,19 @@ bool TransparentPixelBecameBackground(IStream* stream, const BackdropperSettings
     const bool ok = bits[0] == 3 && bits[1] == 2 && bits[2] == 1 && bits[3] == 255;
     DeleteObject(bitmap);
     return ok;
+}
+
+bool Renders(IStream* stream, const BackdropperSettings& settings)
+{
+    HBITMAP bitmap = nullptr;
+    WTS_ALPHATYPE alpha = WTSAT_UNKNOWN;
+    HRESULT hr = RenderBackdropperThumbnail(stream, 32, settings, &bitmap, &alpha);
+    if (FAILED(hr)) {
+        std::printf("FAIL: RenderBackdropperThumbnail (0x%08lx)\n", static_cast<unsigned long>(hr));
+        return false;
+    }
+    DeleteObject(bitmap);
+    return true;
 }
 
 }
@@ -173,6 +240,22 @@ int main()
     }
     const bool psdTransparentBecameBackground = TransparentPixelBecameBackground(psd.Get(), settings);
 
+    ComPtr<IStream> svg;
+    hr = CreateSvgStream(&svg);
+    if (FAILED(hr)) {
+        CoUninitialize();
+        return Fail("CreateSvgStream", hr);
+    }
+    const bool svgTransparentBecameBackground = TransparentPixelBecameBackground(svg.Get(), settings);
+
+    ComPtr<IStream> pdf;
+    hr = CreatePdfStream(&pdf);
+    if (FAILED(hr)) {
+        CoUninitialize();
+        return Fail("CreatePdfStream", hr);
+    }
+    const bool pdfRendered = Renders(pdf.Get(), settings);
+
     BYTE junk[] = { 1, 2, 3, 4 };
     ComPtr<IStream> bad;
     bad.Attach(SHCreateMemStream(junk, sizeof(junk)));
@@ -186,10 +269,11 @@ int main()
     }
 
     CoUninitialize();
-    if (!pngTransparentBecameBackground || !tgaTransparentBecameBackground || !psdTransparentBecameBackground) {
+    if (!pngTransparentBecameBackground || !tgaTransparentBecameBackground
+        || !psdTransparentBecameBackground || !svgTransparentBecameBackground || !pdfRendered) {
         return Fail("transparent pixel was not composited");
     }
 
-    std::puts("OK: PNG/TGA/PSD transparency composited, corrupt input rejected.");
+    std::puts("OK: PNG/TGA/PSD/SVG transparency composited, PDF rendered, corrupt input rejected.");
     return 0;
 }

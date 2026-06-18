@@ -8,4 +8,4 @@ $process = Start-Process -FilePath "$env:SystemRoot\System32\regsvr32.exe" -Argu
 if ($process.ExitCode -ne 0) {
     throw "regsvr32 failed with exit code $($process.ExitCode)"
 }
-Write-Host "Backdropper PNG thumbnail handler registered for current user."
+Write-Host "Backdropper thumbnail handlers registered for current user."

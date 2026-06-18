@@ -156,7 +156,52 @@ bool WicSupportsExtension(const wchar_t* extension)
 
 bool HasBuiltInFallbackRenderer(const wchar_t* extension)
 {
-    return wcscmp(extension, L".psd") == 0 || wcscmp(extension, L".tga") == 0;
+    return wcscmp(extension, L".svg") == 0 || wcscmp(extension, L".pdf") == 0
+        || wcscmp(extension, L".ai") == 0 || wcscmp(extension, L".psd") == 0
+        || wcscmp(extension, L".tga") == 0;
+}
+
+bool HasGhostscript()
+{
+    wchar_t path[MAX_PATH] = {};
+    if (SearchPathW(nullptr, L"gswin64c.exe", nullptr, ARRAYSIZE(path), path, nullptr)
+        || SearchPathW(nullptr, L"gswin32c.exe", nullptr, ARRAYSIZE(path), path, nullptr)) {
+        return true;
+    }
+
+    auto findUnder = [](const wchar_t* base, const wchar_t* exe) {
+        std::wstring pattern = std::wstring(base) + L"\\gs*";
+        WIN32_FIND_DATAW data = {};
+        HANDLE find = FindFirstFileW(pattern.c_str(), &data);
+        while (find != INVALID_HANDLE_VALUE) {
+            if ((data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && wcscmp(data.cFileName, L".") != 0 && wcscmp(data.cFileName, L"..") != 0) {
+                std::wstring candidate = std::wstring(base) + L"\\" + data.cFileName + L"\\bin\\" + exe;
+                if (GetFileAttributesW(candidate.c_str()) != INVALID_FILE_ATTRIBUTES) {
+                    FindClose(find);
+                    return true;
+                }
+            }
+            if (!FindNextFileW(find, &data)) {
+                break;
+            }
+        }
+        if (find != INVALID_HANDLE_VALUE) {
+            FindClose(find);
+        }
+        return false;
+    };
+
+    return findUnder(L"C:\\Program Files\\gs", L"gswin64c.exe")
+        || findUnder(L"C:\\Program Files (x86)\\gs", L"gswin32c.exe");
+}
+
+bool CanRegisterExtension(const wchar_t* extension)
+{
+    if (wcscmp(extension, L".eps") == 0) {
+        // ponytail: Ghostscript is optional; don't steal EPS thumbnails when it is not installed.
+        return HasGhostscript();
+    }
+    return WicSupportsExtension(extension) || HasBuiltInFallbackRenderer(extension);
 }
 
 void SavePreviousHandler(const wchar_t* extension)
@@ -220,7 +265,7 @@ HRESULT RegisterServer()
 
     bool registeredAny = false;
     for (const wchar_t* extension : kExtensions) {
-        if (!WicSupportsExtension(extension) && !HasBuiltInFallbackRenderer(extension)) {
+        if (!CanRegisterExtension(extension)) {
             continue;
         }
 

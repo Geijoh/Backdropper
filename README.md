@@ -2,11 +2,11 @@
 
 Native Windows thumbnail utility for transparent images.
 
-Current build: WIC-backed thumbnail handler with built-in PSD and TGA fallback decoding. It composites transparent thumbnails over a solid/checker/none background in Explorer.
+Current build: WIC-backed thumbnail handler with native SVG/PDF rendering plus built-in PSD and TGA fallback decoding. It composites transparent thumbnails over a solid/checker/none background in Explorer.
 
-Registered extensions: `.png`, `.webp`, `.gif`, `.ico`, `.svg`, `.psd`, `.ai`, `.eps`, `.pdf`, `.avif`, `.tga`, `.dds`.
+Requested extensions: `.png`, `.webp`, `.gif`, `.ico`, `.svg`, `.psd`, `.ai`, `.eps`, `.pdf`, `.avif`, `.tga`, `.dds`.
 
-Backdropper registers PSD and TGA through built-in fallback decoders. Other formats are registered only when Windows has an installed Windows Imaging Component decoder, so unsupported formats keep their existing Explorer behavior.
+Backdropper registers SVG, PDF, PDF-compatible AI, PSD, and TGA through built-in fallback renderers. EPS/PostScript AI register when Ghostscript is installed. Other formats are registered only when Windows has an installed Windows Imaging Component decoder, so unsupported formats keep their existing Explorer behavior.
 
 [Download latest build](https://github.com/Geijoh/Backdropper/releases/latest)
 
@@ -18,6 +18,7 @@ Runtime:
 - 64-bit Windows. The thumbnail handler must match Explorer's bitness.
 - Per-user registration writes to `HKCU\Software\Classes`; admin rights are not required for the normal dev registration path.
 - Settings are stored in `HKCU\Software\Backdropper`.
+- Optional: Ghostscript enables EPS and older PostScript-style AI thumbnails.
 
 Build:
 
@@ -64,4 +65,4 @@ Open `build\bin\BackdropperSettings.exe` to change background settings or unregi
 .\tools\unregister-dev.ps1
 ```
 
-PSD and TGA have built-in flattened-thumbnail fallback support. SVG, AI, EPS, PDF, AVIF, DDS, and WebP support depends on installed WIC codecs; Backdropper skips formats Windows cannot decode.
+SVG and PDF render through native Windows APIs. PDF-compatible AI uses the same PDF renderer. PSD and TGA have built-in flattened-thumbnail fallback support. EPS and older PostScript-style AI use Ghostscript when installed. AVIF, DDS, and WebP support depends on installed WIC codecs.

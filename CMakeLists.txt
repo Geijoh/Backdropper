@@ -28,7 +28,7 @@ add_library(BackdropperThumb SHARED
 )
 target_compile_definitions(BackdropperThumb PRIVATE UNICODE _UNICODE NOMINMAX)
 target_include_directories(BackdropperThumb PRIVATE src/common)
-target_link_libraries(BackdropperThumb PRIVATE windowscodecs shlwapi shell32 ole32 gdi32)
+target_link_libraries(BackdropperThumb PRIVATE windowscodecs shlwapi shell32 shcore ole32 runtimeobject gdi32 d2d1 d3d11 dxgi windowsapp)
 
 add_executable(BackdropperSettings WIN32
   src/Settings/BackdropperSettings.cpp
@@ -51,4 +51,4 @@ add_executable(RenderSmoke
 )
 target_compile_definitions(RenderSmoke PRIVATE UNICODE _UNICODE NOMINMAX)
 target_include_directories(RenderSmoke PRIVATE src/common)
-target_link_libraries(RenderSmoke PRIVATE windowscodecs ole32 shell32 shlwapi gdi32)
+target_link_libraries(RenderSmoke PRIVATE windowscodecs ole32 shell32 shlwapi shcore runtimeobject gdi32 d2d1 d3d11 dxgi windowsapp)
