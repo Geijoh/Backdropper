@@ -37,7 +37,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force dist\Backdropper | Out-Null
-          Copy-Item -Path build\bin\BackdropperSettings.exe, build\bin\BackdropperThumb.dll, README.md, LICENSE -Destination dist\Backdropper
+          Copy-Item -Path build\bin\BackdropperSettings.exe, build\bin\BackdropperThumb.dll, README.md, LICENSE, PRIVACY.md -Destination dist\Backdropper
           Compress-Archive -Path dist\Backdropper\* -DestinationPath "dist\Backdropper-${{ steps.version.outputs.version }}-windows-x64.zip" -Force
 
       - name: Upload package

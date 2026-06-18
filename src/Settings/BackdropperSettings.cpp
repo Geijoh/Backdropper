@@ -36,6 +36,8 @@ constexpr std::array<const wchar_t*, 12> kExtensions = {
 #define BACKDROPPER_VERSION "0.0.0"
 #endif
 constexpr wchar_t kBackdropperVersion[] = WIDEN_TEXT(BACKDROPPER_VERSION);
+constexpr wchar_t kGithubUrl[] = L"https://github.com/Geijoh/Backdropper";
+constexpr wchar_t kPrivacyUrl[] = L"https://github.com/Geijoh/Backdropper/blob/main/PRIVACY.md";
 
 enum class Hit {
     None,
@@ -54,7 +56,10 @@ enum class Hit {
     SizeUp,
     RestartToggle,
     ViewButton,
-    Github,
+    About,
+    AboutClose,
+    AboutGithub,
+    AboutPrivacy,
     Register,
     Unregister,
     Save,
@@ -126,7 +131,11 @@ struct Layout {
     RECT viewButton {};
     RECT viewMenu {};
     std::array<RECT, 7> menuItems {};
-    RECT githubBtn {};
+    RECT aboutBtn {};
+    RECT aboutDialog {};
+    RECT aboutClose {};
+    RECT aboutGithub {};
+    RECT aboutPrivacy {};
     RECT registerBtn {};
     RECT unregisterBtn {};
     RECT saveBtn {};
@@ -151,6 +160,7 @@ struct AppState {
     ViewMode view = ViewMode::Large;
     std::wstring dialogTitle;
     std::wstring dialogBody;
+    bool aboutOpen = false;
     bool syncingEdits = false;
 };
 
@@ -168,6 +178,8 @@ Layout g_layout;
 AppState g_state;
 Hit g_hover = Hit::None;
 bool g_trackingMouse = false;
+
+void LayoutChildWindows(HWND window);
 
 int Px(double dip)
 {
@@ -367,6 +379,7 @@ void OpenDialog(HWND window, const std::wstring& title, const std::wstring& body
     g_state.dialogTitle = title;
     g_state.dialogBody = body;
     g_state.viewMenuOpen = false;
+    LayoutChildWindows(window);
     InvalidateRect(window, nullptr, TRUE);
 }
 
@@ -375,10 +388,31 @@ bool DialogOpen()
     return !g_state.dialogTitle.empty();
 }
 
+bool AboutOpen()
+{
+    return g_state.aboutOpen;
+}
+
 void CloseDialog(HWND window)
 {
     g_state.dialogTitle.clear();
     g_state.dialogBody.clear();
+    LayoutChildWindows(window);
+    InvalidateRect(window, nullptr, TRUE);
+}
+
+void OpenAbout(HWND window)
+{
+    g_state.aboutOpen = true;
+    g_state.viewMenuOpen = false;
+    LayoutChildWindows(window);
+    InvalidateRect(window, nullptr, TRUE);
+}
+
+void CloseAbout(HWND window)
+{
+    g_state.aboutOpen = false;
+    LayoutChildWindows(window);
     InvalidateRect(window, nullptr, TRUE);
 }
 
@@ -489,15 +523,15 @@ void CalculateLayout(HWND window)
     const double saveW = 70;
     const double unregW = 96;
     const double regW = 132;
-    const double githubW = 36;
+    const double aboutW = 36;
     const double saveX = w - 20 - saveW;
     const double unregX = saveX - 10 - 9 - 10 - unregW;
     const double regX = unregX - 10 - regW;
-    const double githubX = regX - 10 - githubW;
+    const double aboutX = regX - 10 - aboutW;
     g_layout.saveBtn = RectDip(saveX, footerY + 13, saveW, 32);
     g_layout.unregisterBtn = RectDip(unregX, footerY + 13, unregW, 32);
     g_layout.registerBtn = RectDip(regX, footerY + 13, regW, 32);
-    g_layout.githubBtn = RectDip(githubX, footerY + 13, githubW, 32);
+    g_layout.aboutBtn = RectDip(aboutX, footerY + 13, aboutW, 32);
 
     const double rightX = leftW;
     const double rightW = w - leftW;
@@ -512,6 +546,15 @@ void CalculateLayout(HWND window)
     }
 
     g_layout.dialogOk = RectDip((w - 312) / 2, (h - 156) / 2 + 98, 312, 34);
+
+    constexpr double aboutDialogW = 394;
+    constexpr double aboutDialogH = 376;
+    const double aboutDialogX = (w - aboutDialogW) / 2;
+    const double aboutDialogY = (h - aboutDialogH) / 2;
+    g_layout.aboutDialog = RectDip(aboutDialogX, aboutDialogY, aboutDialogW, aboutDialogH);
+    g_layout.aboutClose = RectDip(aboutDialogX + 348, aboutDialogY + 18, 28, 28);
+    g_layout.aboutGithub = RectDip(aboutDialogX + 28, aboutDialogY + 315, 163, 34);
+    g_layout.aboutPrivacy = RectDip(aboutDialogX + 210, aboutDialogY + 315, 166, 34);
 }
 
 void MoveEdit(HWND edit, const RECT& outer)
@@ -534,7 +577,7 @@ void MoveEdit(HWND edit, const RECT& outer)
 void LayoutChildWindows(HWND window)
 {
     CalculateLayout(window);
-    const bool show = !DialogOpen();
+    const bool show = !DialogOpen() && !AboutOpen();
 
     ShowWindow(g_solidEdit, show && g_state.settings.mode == BackdropMode::Solid ? SW_SHOW : SW_HIDE);
     ShowWindow(g_checkerAEdit, show && g_state.settings.mode == BackdropMode::Checker ? SW_SHOW : SW_HIDE);
@@ -802,6 +845,88 @@ void DrawGithubIcon(Graphics& g, const RECT& rect, const Theme& t)
 
     SolidBrush brush(t.fg);
     g.FillPath(&brush, &path);
+}
+
+void DrawInfoIcon(Graphics& g, const RECT& rect, const Theme& t)
+{
+    const double size = 16;
+    const double left = Dip(rect.left) + (Dip(rect.right - rect.left) - size) / 2;
+    const double top = Dip(rect.top) + (Dip(rect.bottom - rect.top) - size) / 2;
+    Pen pen(t.fg2, static_cast<REAL>(Px(1.4)));
+    g.DrawEllipse(&pen, RectFOf(RectDip(left, top, size, size)));
+    DrawTextBlock(g, L"i", RectDip(left, top - 0.5, size, size), 10.5f, t.fg2,
+        FontStyleBold, StringAlignmentCenter, StringAlignmentCenter);
+}
+
+void DrawShieldIcon(Graphics& g, const RECT& rect, const Theme& t)
+{
+    const double size = 16;
+    const double left = Dip(rect.left) + (Dip(rect.right - rect.left) - size) / 2;
+    const double top = Dip(rect.top) + (Dip(rect.bottom - rect.top) - size) / 2;
+
+    GraphicsPath shield;
+    shield.AddLine(static_cast<REAL>(Px(left + 8)), static_cast<REAL>(Px(top + 1.5)),
+        static_cast<REAL>(Px(left + 13)), static_cast<REAL>(Px(top + 3.4)));
+    shield.AddLine(static_cast<REAL>(Px(left + 13)), static_cast<REAL>(Px(top + 7.1)),
+        static_cast<REAL>(Px(left + 11.2)), static_cast<REAL>(Px(top + 11.5)));
+    shield.AddLine(static_cast<REAL>(Px(left + 8)), static_cast<REAL>(Px(top + 14.2)),
+        static_cast<REAL>(Px(left + 4.8)), static_cast<REAL>(Px(top + 11.5)));
+    shield.AddLine(static_cast<REAL>(Px(left + 3)), static_cast<REAL>(Px(top + 7.1)),
+        static_cast<REAL>(Px(left + 3)), static_cast<REAL>(Px(top + 3.4)));
+    shield.CloseFigure();
+
+    Pen pen(t.fg, static_cast<REAL>(Px(1.25)));
+    pen.SetLineJoin(LineJoinRound);
+    g.DrawPath(&pen, &shield);
+}
+
+void DrawAboutActionButton(Graphics& g, const RECT& rect, const std::wstring& text, const Theme& t, Hit hit, bool github)
+{
+    const bool hovered = g_hover == hit;
+    DrawRoundedBorder(g, rect, 5,
+        hovered ? (EffectiveDark() ? Rgba(255, 255, 255, 20) : Rgba(0, 0, 0, 10)) : t.ctrl,
+        t.ctrlBorder);
+
+    const double groupW = github ? 88 : 112;
+    const double iconSize = 18;
+    const double x = Dip(rect.left) + (Dip(rect.right - rect.left) - groupW) / 2;
+    const double y = Dip(rect.top) + (Dip(rect.bottom - rect.top) - iconSize) / 2;
+    const RECT icon = RectDip(x, y, iconSize, iconSize);
+    if (github) {
+        DrawGithubIcon(g, icon, t);
+    } else {
+        DrawShieldIcon(g, icon, t);
+    }
+
+    DrawTextBlock(g, text, RectDip(x + iconSize + 8, Dip(rect.top), groupW - iconSize - 8, Dip(rect.bottom - rect.top)),
+        12.5f, t.fg, FontStyleRegular, StringAlignmentNear, StringAlignmentCenter);
+}
+
+void DrawCreatedByLine(Graphics& g, const RECT& rect, const Theme& t)
+{
+    FontFamily family(L"Segoe UI Variable Text");
+    FontFamily fallback(L"Segoe UI");
+    const FontFamily* selectedFamily = family.GetLastStatus() == Ok ? &family : &fallback;
+    Font regular(selectedFamily, static_cast<REAL>(Px(12.5f)), FontStyleRegular, UnitPixel);
+    Font bold(selectedFamily, static_cast<REAL>(Px(12.5f)), FontStyleBold, UnitPixel);
+    StringFormat format;
+    format.SetFormatFlags(StringFormatFlagsNoWrap);
+    format.SetLineAlignment(StringAlignmentCenter);
+
+    const wchar_t prefix[] = L"Created by ";
+    const wchar_t name[] = L"Chris Johnson";
+    RectF prefixBounds;
+    RectF nameBounds;
+    g.MeasureString(prefix, -1, &regular, PointF(0, 0), &prefixBounds);
+    g.MeasureString(name, -1, &bold, PointF(0, 0), &nameBounds);
+
+    const REAL total = prefixBounds.Width + nameBounds.Width;
+    const REAL height = std::max(prefixBounds.Height, nameBounds.Height);
+    const REAL x = static_cast<REAL>(rect.left) + (static_cast<REAL>(rect.right - rect.left) - total) / 2;
+    const REAL y = static_cast<REAL>(rect.top) + (static_cast<REAL>(rect.bottom - rect.top) - height) / 2;
+    SolidBrush brush(t.fg);
+    g.DrawString(prefix, -1, &regular, PointF(x, y), &format, &brush);
+    g.DrawString(name, -1, &bold, PointF(x + prefixBounds.Width, y), &format, &brush);
 }
 
 void DrawSegment(Graphics& g, const RECT& rect, const std::wstring& text, bool active, const Theme& t)
@@ -1224,7 +1349,6 @@ void DrawLeftPane(Graphics& g, const Theme& t)
     const double cardW = leftW - 44;
 
     DrawTextBlock(g, L"Backdropper", RectDip(22, 61, 140, 28), 21, t.fg, FontStyleBold);
-    DrawTextBlock(g, (std::wstring(L"v") + kBackdropperVersion), RectDip(166, 69, 72, 16), 11, t.fg2);
     DrawTextBlock(g, L"Transparent image backgrounds", RectDip(22, 91, 280, 20), 13, t.fg2);
 
     double cardY = 116;
@@ -1310,10 +1434,10 @@ void DrawFooter(Graphics& g, const RECT& client, const Theme& t)
     g.FillEllipse(&dot, RectFOf(RectDip(20, y + 25, 8, 8)));
     DrawTextBlock(g, RegistrationText(), RectDip(38, y + 19, 420, 20), 12.5f, t.fg2);
 
-    DrawRoundedBorder(g, g_layout.githubBtn, 5,
-        g_hover == Hit::Github ? (EffectiveDark() ? Rgba(255, 255, 255, 20) : Rgba(0, 0, 0, 10)) : t.ctrl,
+    DrawRoundedBorder(g, g_layout.aboutBtn, 5,
+        g_hover == Hit::About ? (EffectiveDark() ? Rgba(255, 255, 255, 20) : Rgba(0, 0, 0, 10)) : t.ctrl,
         t.ctrlBorder);
-    DrawGithubIcon(g, g_layout.githubBtn, t);
+    DrawInfoIcon(g, g_layout.aboutBtn, t);
     DrawButton(g, g_layout.registerBtn, L"Register formats", t, false, false, g_hover == Hit::Register);
     DrawButton(g, g_layout.unregisterBtn, L"Unregister", t, false, !g_state.registered, g_hover == Hit::Unregister);
     g.FillRectangle(&stroke, RectFOf(RectDip(Dip(g_layout.saveBtn.left) - 15, y + 17, 1, 24)));
@@ -1337,6 +1461,52 @@ void DrawDialog(Graphics& g, const RECT& client, const Theme& t)
     DrawTextBlock(g, g_state.dialogBody, RectDip(Dip(dlg.left) + 24, Dip(dlg.top) + 61, 312, 86), 13.5f, t.fg2,
         FontStyleRegular, StringAlignmentNear, StringAlignmentNear, true);
     DrawButton(g, g_layout.dialogOk, L"OK", t, true, false, g_hover == Hit::DialogOk);
+}
+
+void DrawAboutDialog(Graphics& g, const RECT& client, const Theme& t)
+{
+    if (!AboutOpen()) {
+        return;
+    }
+
+    SolidBrush overlay(Rgba(0, 0, 0, 112));
+    g.FillRectangle(&overlay, RectFOf(client));
+
+    const RECT dlg = g_layout.aboutDialog;
+    const double x = Dip(dlg.left);
+    const double y = Dip(dlg.top);
+    const double w = Dip(dlg.right - dlg.left);
+    const double h = Dip(dlg.bottom - dlg.top);
+
+    DrawRounded(g, RectDip(x + 1, y + 11, w - 2, h), 8, Rgba(0, 0, 0, 24));
+    DrawRounded(g, RectDip(x, y + 5, w, h), 8, Rgba(0, 0, 0, 16));
+    DrawRoundedBorder(g, dlg, 8, t.dialogBg, t.dialogBorder);
+
+    if (g_hover == Hit::AboutClose) {
+        DrawRounded(g, g_layout.aboutClose, 4, EffectiveDark() ? Rgba(255, 255, 255, 18) : Rgba(0, 0, 0, 8));
+    }
+    const Color closeColor = g_hover == Hit::AboutClose ? t.fg : t.fg2;
+    DrawLine(g, x + 357, y + 26, x + 365, y + 34, closeColor, 1.2f);
+    DrawLine(g, x + 365, y + 26, x + 357, y + 34, closeColor, 1.2f);
+
+    DrawAppIcon(g, x + 174, y + 57, 46, t);
+    DrawTextBlock(g, L"Backdropper", RectDip(x + 64, y + 129, 266, 30), 21, t.fg,
+        FontStyleBold, StringAlignmentCenter, StringAlignmentCenter);
+    DrawTextBlock(g, std::wstring(L"Version ") + kBackdropperVersion, RectDip(x + 64, y + 160, 266, 20),
+        12.5f, t.fg2, FontStyleRegular, StringAlignmentCenter, StringAlignmentCenter);
+    DrawTextBlock(g, L"Composite transparent PNG thumbnails over a\nbackground so they're easy to see in File Explorer.",
+        RectDip(x + 30, y + 188, 334, 52), 12.5f, t.fg2,
+        FontStyleRegular, StringAlignmentCenter, StringAlignmentNear, true);
+
+    SolidBrush divider(t.stroke);
+    g.FillRectangle(&divider, RectFOf(RectDip(x + 28, y + 244, 338, 1)));
+    DrawCreatedByLine(g, RectDip(x + 64, y + 263, 266, 20), t);
+    DrawTextBlock(g, L"\x00A9 2026 Chris Johnson. All rights reserved.",
+        RectDip(x + 64, y + 283, 266, 20), 12, t.fg2,
+        FontStyleRegular, StringAlignmentCenter, StringAlignmentCenter);
+
+    DrawAboutActionButton(g, g_layout.aboutGithub, L"GitHub", t, Hit::AboutGithub, true);
+    DrawAboutActionButton(g, g_layout.aboutPrivacy, L"Privacy Policy", t, Hit::AboutPrivacy, false);
 }
 
 void Paint(HWND window, HDC hdc)
@@ -1364,6 +1534,7 @@ void Paint(HWND window, HDC hdc)
     DrawRightPane(g, t);
     DrawFooter(g, client, t);
     DrawDialog(g, client, t);
+    DrawAboutDialog(g, client, t);
 
     BitBlt(hdc, 0, 0, client.right, client.bottom, mem, 0, 0, SRCCOPY);
     SelectObject(mem, old);
@@ -1373,6 +1544,13 @@ void Paint(HWND window, HDC hdc)
 
 Hit HitTest(POINT pt)
 {
+    if (AboutOpen()) {
+        if (PtIn(g_layout.aboutClose, pt)) return Hit::AboutClose;
+        if (PtIn(g_layout.aboutGithub, pt)) return Hit::AboutGithub;
+        if (PtIn(g_layout.aboutPrivacy, pt)) return Hit::AboutPrivacy;
+        return Hit::None;
+    }
+
     if (DialogOpen()) {
         return PtIn(g_layout.dialogOk, pt) ? Hit::DialogOk : Hit::None;
     }
@@ -1403,7 +1581,7 @@ Hit HitTest(POINT pt)
     if (PtIn(g_layout.sizeUp, pt)) return Hit::SizeUp;
     if (PtIn(g_layout.restartToggle, pt)) return Hit::RestartToggle;
     if (PtIn(g_layout.viewButton, pt)) return Hit::ViewButton;
-    if (PtIn(g_layout.githubBtn, pt)) return Hit::Github;
+    if (PtIn(g_layout.aboutBtn, pt)) return Hit::About;
     if (PtIn(g_layout.registerBtn, pt)) return Hit::Register;
     if (PtIn(g_layout.unregisterBtn, pt)) return Hit::Unregister;
     if (PtIn(g_layout.saveBtn, pt)) return Hit::Save;
@@ -1513,6 +1691,23 @@ void StepSize(HWND window, int delta)
 
 void ActivateHit(HWND window, Hit hit)
 {
+    if (AboutOpen()) {
+        switch (hit) {
+        case Hit::AboutClose:
+            CloseAbout(window);
+            break;
+        case Hit::AboutGithub:
+            ShellExecuteW(window, L"open", kGithubUrl, nullptr, nullptr, SW_SHOWNORMAL);
+            break;
+        case Hit::AboutPrivacy:
+            ShellExecuteW(window, L"open", kPrivacyUrl, nullptr, nullptr, SW_SHOWNORMAL);
+            break;
+        default:
+            break;
+        }
+        return;
+    }
+
     if (DialogOpen()) {
         if (hit == Hit::DialogOk || hit == Hit::None) {
             CloseDialog(window);
@@ -1598,9 +1793,8 @@ void ActivateHit(HWND window, Hit hit)
         g_state.viewMenuOpen = !g_state.viewMenuOpen;
         InvalidateRect(window, nullptr, TRUE);
         break;
-    case Hit::Github:
-        ShellExecuteW(window, L"open", L"https://github.com/Geijoh/Backdropper",
-            nullptr, nullptr, SW_SHOWNORMAL);
+    case Hit::About:
+        OpenAbout(window);
         break;
     case Hit::Register:
         {
@@ -1756,7 +1950,9 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
 
     case WM_KEYDOWN:
         if (wparam == VK_ESCAPE) {
-            if (DialogOpen()) {
+            if (AboutOpen()) {
+                CloseAbout(window);
+            } else if (DialogOpen()) {
                 CloseDialog(window);
             } else if (g_state.viewMenuOpen) {
                 g_state.viewMenuOpen = false;
