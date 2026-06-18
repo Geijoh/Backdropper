@@ -16,4 +16,6 @@ Keep the version in `VERSION.md`; CMake injects it into the app UI.
 
 Before any commit or push, rebuild Release, run `tools\capture-screenshots.ps1`, and stage changed `assets\screenshots\*.png`.
 
+When screenshots are added or changed, make sure the README references every screenshot that should be user-visible, then commit and push the screenshot assets.
+
 The screenshot script masks the same rounded window region the app uses so exported PNG corners stay transparent.
