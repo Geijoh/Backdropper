@@ -39,6 +39,8 @@ Build:
 
 ![Backdropper settings window](assets/screenshots/settings-main.png)
 
+![Backdropper supported formats dialog](assets/screenshots/settings-supported-formats.png)
+
 ![Backdropper preview view menu](assets/screenshots/settings-view-menu.png)
 
 ![Backdropper about dialog](assets/screenshots/settings-about.png)

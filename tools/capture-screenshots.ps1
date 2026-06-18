@@ -210,6 +210,16 @@ try {
     [ScreenshotWin32]::GetWindowRect($hwnd, [ref]$rect) | Out-Null
     $width = $rect.Right - $rect.Left
     $height = $rect.Bottom - $rect.Top
+
+    # Open Supported formats from the left pane.
+    [ScreenshotWin32]::ClientClick($hwnd, [int]($width * 397 / 1060), [int]($height * 406 / 692))
+    Start-Sleep -Milliseconds 300
+
+    [ScreenshotWin32]::SaveWindowPng($hwnd, (Join-Path $OutDir "settings-supported-formats.png"))
+
+    [ScreenshotWin32]::ClientClick($hwnd, [int]($width * 744 / 1060), [int]($height * 550 / 692))
+    Start-Sleep -Milliseconds 200
+
     # Natural layout is 1060x692 DIPs; ratio keeps this DPI-independent.
     [ScreenshotWin32]::ClientClick($hwnd, [int]($width * 959 / 1060), [int]($height * 118 / 692))
     Start-Sleep -Milliseconds 300
