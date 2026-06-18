@@ -43,12 +43,14 @@ target_link_libraries(BackdropperSettings PRIVATE comctl32 shell32 shlwapi ole32
 target_link_options(BackdropperSettings PRIVATE
   "/MANIFESTDEPENDENCY:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'"
 )
-add_custom_command(TARGET BackdropperSettings POST_BUILD
-  COMMAND ${CMAKE_COMMAND} -E copy_if_different
-    "${CMAKE_CURRENT_SOURCE_DIR}/tools/update-backdropper.ps1"
-    "$<TARGET_FILE_DIR:BackdropperSettings>/update-backdropper.ps1"
-)
 set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT BackdropperSettings)
+
+add_executable(BackdropperUpdater
+  src/Updater/BackdropperUpdater.cpp
+)
+target_compile_definitions(BackdropperUpdater PRIVATE UNICODE _UNICODE NOMINMAX)
+target_link_libraries(BackdropperUpdater PRIVATE shell32 urlmon)
+add_dependencies(BackdropperSettings BackdropperUpdater)
 
 add_executable(RenderSmoke
   src/RenderSmoke/RenderSmoke.cpp

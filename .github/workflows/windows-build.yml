@@ -23,8 +23,31 @@ jobs:
       - name: Build
         run: cmake --build build --config Release
 
+      - name: Sign shipping binaries
+        shell: pwsh
+        env:
+          WINDOWS_SIGNING_CERT_BASE64: ${{ secrets.WINDOWS_SIGNING_CERT_BASE64 }}
+          WINDOWS_SIGNING_CERT_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERT_PASSWORD }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_SIGNING_CERT_BASE64)) {
+            "Signing skipped; WINDOWS_SIGNING_CERT_BASE64 is not configured."
+            exit 0
+          }
+
+          $pfx = Join-Path $env:RUNNER_TEMP 'backdropper-signing.pfx'
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_SIGNING_CERT_BASE64))
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter signtool.exe |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1 -ExpandProperty FullName
+          if (-not $signtool) { throw 'signtool.exe not found.' }
+
+          & $signtool sign /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com /f $pfx /p $env:WINDOWS_SIGNING_CERT_PASSWORD build\bin\BackdropperSettings.exe build\bin\BackdropperThumb.dll build\bin\BackdropperUpdater.exe
+
       - name: Smoke test
-        run: .\build\bin\RenderSmoke.exe
+        shell: pwsh
+        run: |
+          .\build\bin\RenderSmoke.exe
+          .\build\bin\BackdropperUpdater.exe --self-test
 
       - name: Read version
         id: version
@@ -39,7 +62,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force dist\Backdropper | Out-Null
-          Copy-Item -Path build\bin\BackdropperSettings.exe, build\bin\BackdropperThumb.dll, tools\update-backdropper.ps1, README.md, LICENSE, PRIVACY.md -Destination dist\Backdropper
+          Copy-Item -Path build\bin\BackdropperSettings.exe, build\bin\BackdropperThumb.dll, build\bin\BackdropperUpdater.exe, README.md, LICENSE, PRIVACY.md -Destination dist\Backdropper
           Compress-Archive -Path dist\Backdropper\* -DestinationPath "dist\Backdropper-${{ steps.version.outputs.version }}-windows-x64.zip" -Force
           Copy-Item -Path "dist\Backdropper-${{ steps.version.outputs.version }}-windows-x64.zip" -Destination "dist\Backdropper-latest-windows-x64.zip" -Force
           Set-Content -Path dist\backdropper-version.txt -Value "${{ steps.version.outputs.version }}" -NoNewline

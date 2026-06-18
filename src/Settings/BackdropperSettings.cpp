@@ -39,7 +39,7 @@ constexpr std::array<const wchar_t*, 12> kExtensions = {
 constexpr wchar_t kBackdropperVersion[] = WIDEN_TEXT(BACKDROPPER_VERSION);
 constexpr wchar_t kGithubUrl[] = L"https://github.com/Geijoh/Backdropper";
 constexpr wchar_t kPrivacyUrl[] = L"https://github.com/Geijoh/Backdropper/blob/main/PRIVACY.md";
-constexpr wchar_t kUpdaterScriptName[] = L"update-backdropper.ps1";
+constexpr wchar_t kUpdaterExeName[] = L"BackdropperUpdater.exe";
 constexpr wchar_t kLatestVersionUrl[] = L"https://github.com/Geijoh/Backdropper/releases/latest/download/backdropper-version.txt";
 
 enum class Hit {
@@ -359,19 +359,19 @@ std::wstring AppDirectory()
     return path;
 }
 
-std::wstring UpdaterScriptPath()
+std::wstring UpdaterPath()
 {
     wchar_t path[MAX_PATH] = {};
     wcscpy_s(path, AppDirectory().c_str());
-    PathAppendW(path, kUpdaterScriptName);
+    PathAppendW(path, kUpdaterExeName);
     return path;
 }
 
-std::wstring TempUpdaterScriptPath()
+std::wstring TempUpdaterPath()
 {
     wchar_t tempDir[MAX_PATH] = {};
     GetTempPathW(ARRAYSIZE(tempDir), tempDir);
-    return std::wstring(tempDir) + L"BackdropperUpdate-" + std::to_wstring(GetCurrentProcessId()) + L".ps1";
+    return std::wstring(tempDir) + L"BackdropperUpdate-" + std::to_wstring(GetCurrentProcessId()) + L".exe";
 }
 
 std::wstring QuoteArg(const std::wstring& value)
@@ -381,16 +381,16 @@ std::wstring QuoteArg(const std::wstring& value)
 
 bool LaunchUpdater(HWND owner)
 {
-    const std::wstring script = UpdaterScriptPath();
-    if (GetFileAttributesW(script.c_str()) == INVALID_FILE_ATTRIBUTES) {
+    const std::wstring updater = UpdaterPath();
+    if (GetFileAttributesW(updater.c_str()) == INVALID_FILE_ATTRIBUTES) {
         g_state.aboutOpen = false;
         OpenDialog(owner, L"Updater not found",
-            L"The updater script was not found next to BackdropperSettings.exe. Download the latest build from GitHub Releases.");
+            L"BackdropperUpdater.exe was not found next to BackdropperSettings.exe. Download the latest build from GitHub Releases.");
         return false;
     }
 
-    const std::wstring tempScript = TempUpdaterScriptPath();
-    if (!CopyFileW(script.c_str(), tempScript.c_str(), FALSE)) {
+    const std::wstring tempUpdater = TempUpdaterPath();
+    if (!CopyFileW(updater.c_str(), tempUpdater.c_str(), FALSE)) {
         g_state.aboutOpen = false;
         OpenDialog(owner, L"Update failed",
             L"Backdropper could not copy the updater to a temporary file.");
@@ -398,23 +398,22 @@ bool LaunchUpdater(HWND owner)
     }
 
     const std::wstring args =
-        std::wstring(L"-NoProfile -ExecutionPolicy Bypass -File ") + QuoteArg(tempScript)
-        + L" -InstallDir " + QuoteArg(AppDirectory())
-        + L" -CurrentPid " + std::to_wstring(GetCurrentProcessId())
-        + L" -CurrentVersion " + QuoteArg(kBackdropperVersion);
+        std::wstring(L"--install-dir ") + QuoteArg(AppDirectory())
+        + L" --current-pid " + std::to_wstring(GetCurrentProcessId())
+        + L" --current-version " + QuoteArg(kBackdropperVersion);
 
     SHELLEXECUTEINFOW info = {};
     info.cbSize = sizeof(info);
     info.hwnd = owner;
     info.lpVerb = L"open";
-    info.lpFile = L"powershell.exe";
+    info.lpFile = tempUpdater.c_str();
     info.lpParameters = args.c_str();
     info.nShow = SW_SHOWNORMAL;
 
     if (!ShellExecuteExW(&info)) {
         g_state.aboutOpen = false;
         OpenDialog(owner, L"Update failed",
-            L"Backdropper could not start PowerShell to run the updater.");
+            L"Backdropper could not start the updater.");
         return false;
     }
 

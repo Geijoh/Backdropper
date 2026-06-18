@@ -80,7 +80,7 @@ SVG and PDF render through native Windows APIs. PDF-compatible AI uses the same 
 
 ## Update Script
 
-Release ZIPs include `update-backdropper.ps1`. The app uses this script for update actions. It downloads the latest release ZIP, waits for the settings app to close, replaces files in-place, and starts Backdropper again. If Explorer has the handler DLL locked, the script restarts Explorer and retries the replacement.
+Release ZIPs include `BackdropperUpdater.exe`. The app uses this helper for update actions. It downloads the latest release ZIP, waits for the settings app to close, replaces files in-place, and starts Backdropper again. If Explorer has the handler DLL locked, the updater restarts Explorer and retries the replacement.
 
 ## Development Note
 
