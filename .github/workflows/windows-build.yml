@@ -54,8 +54,12 @@ jobs:
         run: |
           $tag = '${{ steps.version.outputs.tag }}'
           $zip = 'dist\Backdropper-${{ steps.version.outputs.version }}-windows-x64.zip'
-          if (gh release view $tag *> $null) {
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -eq 0) {
             gh release upload $tag $zip --clobber
           } else {
             gh release create $tag $zip --target $env:GITHUB_SHA --title "Backdropper $tag" --notes "Automated Windows x64 build for $tag."
+            if ($LASTEXITCODE -ne 0) {
+              gh release upload $tag $zip --clobber
+            }
           }
