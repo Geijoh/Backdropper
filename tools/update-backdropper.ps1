@@ -93,8 +93,7 @@ try {
     try {
         Copy-Payload -PayloadDir $payloadDir
     } catch {
-        Write-Step "Files are still in use. Restarting shell thumbnail hosts and retrying..."
-        Stop-Process -Name prevhost,dllhost -Force -ErrorAction SilentlyContinue
+        Write-Step "Files are still in use. Restarting Explorer and retrying..."
         Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
         $stoppedExplorer = $true
         Start-Sleep -Seconds 2

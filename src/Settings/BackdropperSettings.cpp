@@ -1940,10 +1940,10 @@ void SaveSettings(HWND window)
 
     if (g_state.settings.deleteThumbnailDbsOnSave) {
         SetCursor(LoadCursorW(nullptr, IDC_WAIT));
-        ForceDeleteThumbcacheDbs();
+        const std::wstring cacheResult = ForceDeleteThumbcacheDbs();
         SetCursor(LoadCursorW(nullptr, IDC_ARROW));
         OpenDialog(window, L"Settings saved",
-            L"Settings saved to HKCU\\Software\\Backdropper. Explorer was restarted and the thumbnail caches (thumbcache_*.db) were cleared \u2014 new thumbnails will regenerate as you browse.");
+            L"Settings saved to HKCU\\Software\\Backdropper. " + cacheResult);
     } else {
         OpenDialog(window, L"Settings saved",
             L"Settings saved to HKCU\\Software\\Backdropper. Existing thumbnails may keep their previous background until the thumbnail cache refreshes.");

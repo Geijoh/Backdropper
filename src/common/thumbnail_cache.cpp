@@ -9,26 +9,6 @@
 
 namespace {
 
-bool RunHidden(const wchar_t* file, wchar_t* args)
-{
-    SHELLEXECUTEINFOW info = {};
-    info.cbSize = sizeof(info);
-    info.fMask = SEE_MASK_NOCLOSEPROCESS;
-    info.lpVerb = L"open";
-    info.lpFile = file;
-    info.lpParameters = args;
-    info.nShow = SW_HIDE;
-    if (!ShellExecuteExW(&info)) {
-        return false;
-    }
-
-    WaitForSingleObject(info.hProcess, INFINITE);
-    DWORD exitCode = 1;
-    GetExitCodeProcess(info.hProcess, &exitCode);
-    CloseHandle(info.hProcess);
-    return exitCode == 0;
-}
-
 bool WaitForShellWindow(bool present, DWORD timeoutMs)
 {
     const DWORD start = GetTickCount();
@@ -57,6 +37,33 @@ bool StartExplorerShell()
         }
     }
     return false;
+}
+
+bool StopShellExplorer()
+{
+    HWND shell = FindWindowW(L"Shell_TrayWnd", nullptr);
+    if (!shell) {
+        return true;
+    }
+
+    DWORD pid = 0;
+    GetWindowThreadProcessId(shell, &pid);
+    if (!pid) {
+        return false;
+    }
+
+    HANDLE process = OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE, FALSE, pid);
+    if (!process) {
+        return false;
+    }
+
+    // ponytail: stop only the shell process; never taskkill /t, which can kill apps Explorer launched.
+    const bool stopped = TerminateProcess(process, 0) != FALSE;
+    if (stopped) {
+        WaitForSingleObject(process, 5000);
+    }
+    CloseHandle(process);
+    return stopped;
 }
 
 int DeleteThumbcacheDbs()
@@ -95,20 +102,27 @@ int DeleteThumbcacheDbs()
 
 std::wstring ForceDeleteThumbcacheDbs()
 {
-    // ponytail: Explorer keeps thumbnails in memory; restart first so DB deletion actually sticks.
-    wchar_t killArgs[] = L"/f /t /im explorer.exe";
-    RunHidden(L"taskkill.exe", killArgs);
-    WaitForShellWindow(false, 5000);
+    const bool stopped = StopShellExplorer();
+    if (stopped) {
+        WaitForShellWindow(false, 5000);
+    }
 
     int failures = DeleteThumbcacheDbs();
     if (failures < 0) {
-        StartExplorerShell();
+        if (stopped) {
+            StartExplorerShell();
+        }
         return L"Could not find the thumbnail cache folder.";
     }
 
-    const bool restarted = StartExplorerShell();
+    const bool restarted = stopped ? StartExplorerShell() : FindWindowW(L"Shell_TrayWnd", nullptr) != nullptr;
     SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, nullptr, nullptr);
 
+    if (!stopped) {
+        return failures == 0
+            ? L"Thumbnail cache DB files were deleted without restarting Explorer."
+            : L"Explorer could not be stopped, and some thumbnail cache DB files could not be deleted.";
+    }
     if (!restarted) {
         return L"Thumbnail cache DB files were deleted, but Explorer did not restart automatically.";
     }
