@@ -28,8 +28,11 @@ function Copy-Payload {
     Copy-Item -Path (Join-Path $PayloadDir '*') -Destination $InstallDir -Recurse -Force
 }
 
-function Ensure-Explorer {
-    if (-not (Get-Process -Name explorer -ErrorAction SilentlyContinue)) {
+function Start-ExplorerShell {
+    $explorer = Join-Path $env:WINDIR 'explorer.exe'
+    if (Test-Path -LiteralPath $explorer) {
+        Start-Process -FilePath $explorer
+    } else {
         Start-Process explorer.exe
     }
 }
@@ -101,7 +104,7 @@ try {
     }
 
     if ($stoppedExplorer) {
-        Ensure-Explorer
+        Start-ExplorerShell
     }
 
     Write-Step "Update complete. Starting Backdropper..."
@@ -109,7 +112,7 @@ try {
 } catch {
     Write-Host "[Backdropper] Update failed: $($_.Exception.Message)"
     if ($stoppedExplorer) {
-        Ensure-Explorer
+        Start-ExplorerShell
     }
     Start-Backdropper
     Read-Host 'Press Enter to close'
