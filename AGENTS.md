@@ -1,4 +1,6 @@
-@C:\Users\chris\.codex\RTK.md
+## Shell
+
+Always prefix shell commands with `rtk`.
 
 ## Versioning
 
