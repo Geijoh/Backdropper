@@ -2381,7 +2381,7 @@ void DrawPrivacyMarkdown(Graphics& g, const RECT& viewport, const Theme& t)
     constexpr double headingAfterGap = 4.0;
     constexpr double bodyLineHeight = 24.0;
     constexpr double paragraphGap = 9.0;
-    constexpr double codeLineHeight = 24.0;
+    constexpr double codeLineHeight = 22.0;
     constexpr double codeAfterGap = 10.0;
 
     Region oldClip;
@@ -2468,10 +2468,10 @@ void DrawPrivacyMarkdown(Graphics& g, const RECT& viewport, const Theme& t)
                 ++i;
             }
 
-            const double boxHeight = std::max(58.0, 22.0 + codeLines * codeLineHeight);
+            const double boxHeight = std::max(42.0, 18.0 + codeLines * codeLineHeight);
             if (VerticallyVisible(y, boxHeight, viewport)) {
                 DrawRoundedBorder(g, RectDip(left, y, width, boxHeight), 5, t.ctrl, t.ctrlBorder);
-                DrawTextBlockWithFamily(g, code, RectDip(left + 16, y + 12, width - 32, boxHeight - 22),
+                DrawTextBlockWithFamily(g, code, RectDip(left + 16, y + 9, width - 32, boxHeight - 16),
                     bodySize, t.fg, FontStyleBold, L"Consolas");
             }
             y += boxHeight + codeAfterGap;
