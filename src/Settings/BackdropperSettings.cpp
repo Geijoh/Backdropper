@@ -3016,7 +3016,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
         ScreenToClient(window, &pt);
         CalculateLayout(window);
         const Hit hit = HitTest(pt);
-        if (pt.y >= 0 && pt.y < Px(40) && hit == Hit::None) {
+        if (!AboutOpen() && !PrivacyOpen() && pt.y >= 0 && pt.y < Px(40) && hit == Hit::None) {
             return HTCAPTION;
         }
         return HTCLIENT;
@@ -3067,6 +3067,14 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
     case WM_LBUTTONUP: {
         POINT pt = { GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam) };
         CalculateLayout(window);
+        if (PrivacyOpen() && !PtIn(g_layout.privacyDialog, pt)) {
+            ClosePrivacy(window);
+            return 0;
+        }
+        if (AboutOpen() && !PtIn(g_layout.aboutDialog, pt)) {
+            CloseAbout(window);
+            return 0;
+        }
         ActivateHit(window, HitTest(pt));
         return 0;
     }
