@@ -2301,8 +2301,8 @@ void DrawPrivacyMarkdown(Graphics& g, const RECT& viewport, const Theme& t)
     const double left = Dip(viewport.left);
     const double width = Dip(viewport.right - viewport.left) - 12;
     double y = Dip(viewport.top) - g_state.privacyScroll;
-    constexpr float bodySize = 11.5f;
-    constexpr float headingSize = 12.0f;
+    constexpr float bodySize = 12.0f;
+    constexpr float headingSize = 12.5f;
 
     Region oldClip;
     g.GetClip(&oldClip);
@@ -2365,7 +2365,7 @@ void DrawPrivacyMarkdown(Graphics& g, const RECT& viewport, const Theme& t)
             continue;
         }
         if (StartsWith(line, L"## ")) {
-            drawWrapped(line.substr(3), headingSize, t.fg, FontStyleBold, 13, 0);
+            drawWrapped(line.substr(3), headingSize, t.fg, FontStyleBold, 21, 2);
             ++i;
             continue;
         }
@@ -2383,13 +2383,13 @@ void DrawPrivacyMarkdown(Graphics& g, const RECT& viewport, const Theme& t)
                 ++i;
             }
 
-            const double boxHeight = std::max(34.0, 12.0 + codeLines * 15.0);
+            const double boxHeight = std::max(52.0, 18.0 + codeLines * 21.0);
             if (VerticallyVisible(y, boxHeight, viewport)) {
                 DrawRoundedBorder(g, RectDip(left, y, width, boxHeight), 5, t.ctrl, t.ctrlBorder);
-                DrawTextBlockWithFamily(g, code, RectDip(left + 16, y + 7, width - 32, boxHeight - 12),
+                DrawTextBlockWithFamily(g, code, RectDip(left + 16, y + 10, width - 32, boxHeight - 18),
                     bodySize, t.fg, FontStyleBold, L"Consolas");
             }
-            y += boxHeight;
+            y += boxHeight + 5;
             continue;
         }
 
@@ -2398,7 +2398,7 @@ void DrawPrivacyMarkdown(Graphics& g, const RECT& viewport, const Theme& t)
             paragraph += L" " + StripInlineMarkdown(lines[i]);
         }
 
-        drawWrapped(paragraph, bodySize, t.fg2, FontStyleRegular, 13, 0);
+        drawWrapped(paragraph, bodySize, t.fg2, FontStyleRegular, 20, 5);
     }
 
     g.SetClip(&oldClip, CombineModeReplace);
