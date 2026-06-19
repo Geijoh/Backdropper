@@ -46,6 +46,8 @@ constexpr wchar_t kGithubUrl[] = L"https://github.com/Geijoh/Backdropper";
 constexpr wchar_t kGhostscriptUrl[] = L"https://ghostscript.com/releases/gsdnld.html";
 constexpr wchar_t kUpdaterExeName[] = L"BackdropperUpdater.exe";
 constexpr wchar_t kLatestVersionUrl[] = L"https://github.com/Geijoh/Backdropper/releases/latest/download/backdropper-version.txt";
+constexpr wchar_t kAboutDescription[] = L"Give transparent images a checkerboard or solid background so they're easy to see in File Explorer.";
+constexpr wchar_t kAboutCopyright[] = L"\u00a9 2026 Chris Johnson. All rights reserved.";
 
 enum class Hit {
     None,
@@ -268,6 +270,7 @@ bool g_trackingMouse = false;
 
 void LayoutChildWindows(HWND window);
 void OpenDialog(HWND window, const std::wstring& title, const std::wstring& body);
+double MeasureWrappedTextHeightDip(const std::wstring& text, double widthDip, float sizeDip, int style);
 
 int Px(double dip)
 {
@@ -1041,13 +1044,18 @@ void CalculateLayout(HWND window)
     g_layout.dialogOk = RectDip((w - 292) / 2, (h - 204) / 2 + 148, 292, 34);
 
     constexpr double aboutDialogW = 394;
-    constexpr double aboutDialogH = 374;
+    constexpr double aboutDescriptionY = 194;
+    const double aboutDescriptionH = std::max(46.0, MeasureWrappedTextHeightDip(kAboutDescription, aboutDialogW - 84, 13, FontStyleRegular) + 6.0);
+    const double aboutDividerY = aboutDescriptionY + aboutDescriptionH + 10;
+    const double aboutCopyrightY = aboutDividerY + 22;
+    const double aboutButtonY = aboutCopyrightY + 37;
+    const double aboutDialogH = std::min(std::max(320.0, aboutButtonY + 34 + 17), std::max(320.0, h - 60));
     const double aboutDialogX = (w - aboutDialogW) / 2;
     const double aboutDialogY = (h - aboutDialogH) / 2;
     g_layout.aboutDialog = RectDip(aboutDialogX, aboutDialogY, aboutDialogW, aboutDialogH);
     g_layout.aboutClose = RectDip(aboutDialogX + aboutDialogW - 48, aboutDialogY + 14, 34, 34);
-    g_layout.aboutGithub = RectDip(aboutDialogX + 29, aboutDialogY + 323, 162, 34);
-    g_layout.aboutPrivacy = RectDip(aboutDialogX + 203, aboutDialogY + 323, 162, 34);
+    g_layout.aboutGithub = RectDip(aboutDialogX + 29, aboutDialogY + aboutButtonY, 162, 34);
+    g_layout.aboutPrivacy = RectDip(aboutDialogX + 203, aboutDialogY + aboutButtonY, 162, 34);
 
     const double privacyW = std::min(600.0, std::max(320.0, w - 60));
     const double privacyH = std::min(632.0, std::max(320.0, h - 60));
@@ -1180,6 +1188,13 @@ float MeasureTextHeight(Graphics& g, const std::wstring& text, float widthDip, f
     RectF bounds;
     g.MeasureString(text.c_str(), -1, &font, RectF(0, 0, static_cast<REAL>(Px(widthDip)), 10000), &format, &bounds);
     return static_cast<float>(Dip(static_cast<int>(std::ceil(bounds.Height))));
+}
+
+double MeasureWrappedTextHeightDip(const std::wstring& text, double widthDip, float sizeDip, int style)
+{
+    Bitmap bitmap(1, 1, PixelFormat32bppARGB);
+    Graphics graphics(&bitmap);
+    return MeasureTextHeight(graphics, text, static_cast<float>(widthDip), sizeDip, style);
 }
 
 void DrawTextBlockWithFamily(Graphics& g, const std::wstring& text, const RECT& rect, float sizeDip,
@@ -2281,14 +2296,18 @@ void DrawAboutDialog(Graphics& g, const RECT& client, const Theme& t)
         FontStyleBold, StringAlignmentCenter, StringAlignmentCenter);
     DrawTextBlock(g, std::wstring(L"Version ") + kBackdropperVersion, RectDip(x + 30, y + 161, w - 60, 18),
         12, t.fg2, FontStyleRegular, StringAlignmentCenter, StringAlignmentCenter);
-    DrawTextBlock(g, L"Give transparent images a checkerboard or solid background so they're easy to see in File Explorer.",
-        RectDip(x + 42, y + 194, w - 84, 60), 13, t.fg2, FontStyleRegular,
+    const double buttonY = Dip(g_layout.aboutGithub.top) - y;
+    const double copyrightY = buttonY - 37;
+    const double dividerY = copyrightY - 22;
+    const double descriptionH = std::max(0.0, dividerY - 10 - 194);
+    DrawTextBlock(g, kAboutDescription,
+        RectDip(x + 42, y + 194, w - 84, descriptionH), 13, t.fg2, FontStyleRegular,
         StringAlignmentCenter, StringAlignmentNear, true);
 
     SolidBrush stroke(t.stroke);
-    g.FillRectangle(&stroke, RectFOf(RectDip(x + 30, y + 264, w - 60, 1)));
-    DrawTextBlock(g, L"\u00a9 2026 Chris Johnson. All rights reserved.",
-        RectDip(x + 30, y + 286, w - 60, 18), 12, t.fg2, FontStyleRegular,
+    g.FillRectangle(&stroke, RectFOf(RectDip(x + 30, y + dividerY, w - 60, 1)));
+    DrawTextBlock(g, kAboutCopyright,
+        RectDip(x + 30, y + copyrightY, w - 60, 18), 12, t.fg2, FontStyleRegular,
         StringAlignmentCenter, StringAlignmentCenter);
 
     DrawAboutActionButton(g, g_layout.aboutGithub, L"GitHub", t, Hit::AboutGithub, AboutActionIcon::Github);
