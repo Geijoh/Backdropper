@@ -1837,6 +1837,60 @@ std::wstring ViewLabel(ViewMode view)
     return L"Large icons";
 }
 
+int ViewIndex(ViewMode view)
+{
+    for (int i = 0; i < static_cast<int>(kViewMenuOrder.size()); ++i) {
+        if (kViewMenuOrder[i] == view) {
+            return i;
+        }
+    }
+    return 1;
+}
+
+void SetPreviewView(HWND window, ViewMode view)
+{
+    g_state.view = view;
+    g_state.viewMenuOpen = false;
+    InvalidateRect(window, nullptr, TRUE);
+}
+
+void StepPreviewView(HWND window, int delta)
+{
+    const int index = ViewIndex(g_state.view);
+    const int next = std::max(0, std::min(static_cast<int>(kViewMenuOrder.size()) - 1, index + delta));
+    SetPreviewView(window, kViewMenuOrder[next]);
+}
+
+bool PreviewShortcutsEnabled()
+{
+    return !DialogOpen() && !AboutOpen() && !PrivacyOpen() && !g_state.formatsOpen;
+}
+
+bool HandlePreviewKeyboardShortcut(HWND window, WPARAM key)
+{
+    if (!PreviewShortcutsEnabled() || !(GetKeyState(VK_CONTROL) & 0x8000)) {
+        return false;
+    }
+
+    if ((GetKeyState(VK_SHIFT) & 0x8000) && key >= L'1' && key <= L'7') {
+        SetPreviewView(window, kViewMenuOrder[static_cast<size_t>(key - L'1')]);
+        return true;
+    }
+
+    switch (key) {
+    case VK_OEM_PLUS:
+    case VK_ADD:
+        StepPreviewView(window, -1);
+        return true;
+    case VK_OEM_MINUS:
+    case VK_SUBTRACT:
+        StepPreviewView(window, 1);
+        return true;
+    default:
+        return false;
+    }
+}
+
 void DrawThumb(Graphics& g, const RECT& rect, int fileIndex, const Theme& t)
 {
     if (g_state.settings.mode != BackdropMode::None) {
@@ -2955,9 +3009,7 @@ void ActivateHit(HWND window, Hit hit)
     case Hit::MenuDetails:
     case Hit::MenuTiles: {
         const int index = static_cast<int>(hit) - static_cast<int>(Hit::MenuExtraLarge);
-        g_state.view = kViewMenuOrder[index];
-        g_state.viewMenuOpen = false;
-        InvalidateRect(window, nullptr, TRUE);
+        SetPreviewView(window, kViewMenuOrder[index]);
         break;
     }
     default:
@@ -3088,6 +3140,15 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
             InvalidateRect(window, nullptr, FALSE);
             return 0;
         }
+        if (PreviewShortcutsEnabled() && (GET_KEYSTATE_WPARAM(wparam) & MK_CONTROL)) {
+            CalculateLayout(window);
+            POINT pt = { GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam) };
+            ScreenToClient(window, &pt);
+            if (PtIn(g_layout.previewFrame, pt)) {
+                StepPreviewView(window, GET_WHEEL_DELTA_WPARAM(wparam) > 0 ? -1 : 1);
+                return 0;
+            }
+        }
         if (!DialogOpen() && !AboutOpen() && !g_state.formatsOpen) {
             CalculateLayout(window);
             POINT pt = { GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam) };
@@ -3120,6 +3181,9 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
         }
         if (wparam == VK_RETURN && DialogOpen()) {
             CloseDialog(window);
+            return 0;
+        }
+        if (HandlePreviewKeyboardShortcut(window, wparam)) {
             return 0;
         }
         break;
@@ -3208,6 +3272,12 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, wchar_t*, int show)
 
     MSG msg = {};
     while (GetMessageW(&msg, nullptr, 0, 0)) {
+        if ((msg.message == WM_KEYDOWN || msg.message == WM_SYSKEYDOWN)
+            && window
+            && (msg.hwnd == window || IsChild(window, msg.hwnd))
+            && HandlePreviewKeyboardShortcut(window, msg.wParam)) {
+            continue;
+        }
         if ((msg.message == WM_KEYDOWN || msg.message == WM_KEYUP || msg.message == WM_SYSKEYDOWN || msg.message == WM_SYSKEYUP)
             && (msg.wParam == VK_SHIFT || msg.wParam == VK_LSHIFT || msg.wParam == VK_RSHIFT)) {
             InvalidateRect(window, nullptr, FALSE);
