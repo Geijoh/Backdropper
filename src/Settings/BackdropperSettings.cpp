@@ -2376,6 +2376,13 @@ void DrawPrivacyMarkdown(Graphics& g, const RECT& viewport, const Theme& t)
     double y = Dip(viewport.top) - g_state.privacyScroll;
     constexpr float bodySize = 12.0f;
     constexpr float headingSize = 12.5f;
+    constexpr double headingTopGap = 6.0;
+    constexpr double headingLineHeight = 24.0;
+    constexpr double headingAfterGap = 4.0;
+    constexpr double bodyLineHeight = 24.0;
+    constexpr double paragraphGap = 9.0;
+    constexpr double codeLineHeight = 24.0;
+    constexpr double codeAfterGap = 10.0;
 
     Region oldClip;
     g.GetClip(&oldClip);
@@ -2427,6 +2434,7 @@ void DrawPrivacyMarkdown(Graphics& g, const RECT& viewport, const Theme& t)
         }
     };
 
+    bool contentDrawn = false;
     for (size_t i = 0; i < lines.size();) {
         const std::wstring& line = lines[i];
         if (StartsWith(line, L"# ")) {
@@ -2438,7 +2446,11 @@ void DrawPrivacyMarkdown(Graphics& g, const RECT& viewport, const Theme& t)
             continue;
         }
         if (StartsWith(line, L"## ")) {
-            drawWrapped(line.substr(3), headingSize, t.fg, FontStyleBold, 21, 2);
+            if (contentDrawn) {
+                y += headingTopGap;
+            }
+            drawWrapped(line.substr(3), headingSize, t.fg, FontStyleBold, headingLineHeight, headingAfterGap);
+            contentDrawn = true;
             ++i;
             continue;
         }
@@ -2456,13 +2468,14 @@ void DrawPrivacyMarkdown(Graphics& g, const RECT& viewport, const Theme& t)
                 ++i;
             }
 
-            const double boxHeight = std::max(52.0, 18.0 + codeLines * 21.0);
+            const double boxHeight = std::max(58.0, 22.0 + codeLines * codeLineHeight);
             if (VerticallyVisible(y, boxHeight, viewport)) {
                 DrawRoundedBorder(g, RectDip(left, y, width, boxHeight), 5, t.ctrl, t.ctrlBorder);
-                DrawTextBlockWithFamily(g, code, RectDip(left + 16, y + 10, width - 32, boxHeight - 18),
+                DrawTextBlockWithFamily(g, code, RectDip(left + 16, y + 12, width - 32, boxHeight - 22),
                     bodySize, t.fg, FontStyleBold, L"Consolas");
             }
-            y += boxHeight + 5;
+            y += boxHeight + codeAfterGap;
+            contentDrawn = true;
             continue;
         }
 
@@ -2471,7 +2484,8 @@ void DrawPrivacyMarkdown(Graphics& g, const RECT& viewport, const Theme& t)
             paragraph += L" " + StripInlineMarkdown(lines[i]);
         }
 
-        drawWrapped(paragraph, bodySize, t.fg2, FontStyleRegular, 20, 5);
+        drawWrapped(paragraph, bodySize, t.fg2, FontStyleRegular, bodyLineHeight, paragraphGap);
+        contentDrawn = true;
     }
 
     g.SetClip(&oldClip, CombineModeReplace);
