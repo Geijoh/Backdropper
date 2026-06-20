@@ -12,6 +12,8 @@
 #include <shlwapi.h>
 #include <urlmon.h>
 
+#include "md4c.h"
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -22,6 +24,7 @@
 #include <iterator>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 using namespace Gdiplus;
@@ -116,6 +119,48 @@ enum class ViewMode {
 constexpr std::array<ViewMode, 7> kViewMenuOrder = {
     ViewMode::ExtraLarge, ViewMode::Large, ViewMode::Medium, ViewMode::Small,
     ViewMode::List, ViewMode::Details, ViewMode::Tiles
+};
+
+enum class PrivacyMarkdownBlockKind {
+    Heading,
+    Paragraph,
+    Code,
+};
+
+struct PrivacyMarkdownBlock {
+    PrivacyMarkdownBlockKind kind = PrivacyMarkdownBlockKind::Paragraph;
+    unsigned headingLevel = 0;
+    std::wstring text;
+};
+
+enum class PrivacyTextRole {
+    Heading,
+    Body,
+};
+
+struct PrivacyLayoutText {
+    PrivacyTextRole role = PrivacyTextRole::Body;
+    std::wstring text;
+    double y = 0;
+    double h = 0;
+    float size = 12.0f;
+    int style = FontStyleRegular;
+};
+
+struct PrivacyLayoutCode {
+    std::wstring text;
+    double y = 0;
+    double h = 0;
+};
+
+struct PrivacyLayoutCache {
+    bool valid = false;
+    UINT dpi = 0;
+    int widthPx = 0;
+    std::wstring source;
+    std::vector<PrivacyLayoutText> text;
+    std::vector<PrivacyLayoutCode> code;
+    double contentHeight = 0;
 };
 
 constexpr std::array<size_t, kBackdropperFormatCount> kFormatsDialogOrder = {
@@ -250,6 +295,7 @@ struct AppState {
     double leftScroll = 0;
     double leftContentHeight = 0;
     std::wstring privacyMarkdown;
+    PrivacyLayoutCache privacyLayout;
     bool syncingEdits = false;
 };
 
@@ -861,6 +907,7 @@ void OpenPrivacy(HWND window)
     g_state.privacyMarkdown = LoadPrivacyMarkdown();
     g_state.privacyScroll = 0;
     g_state.privacyContentHeight = 0;
+    g_state.privacyLayout = {};
     g_state.privacyOpen = true;
     g_state.viewMenuOpen = false;
     LayoutChildWindows(window);
@@ -886,6 +933,7 @@ void ApplyDpi(HWND window, UINT dpi)
 {
     g_dpi = dpi ? dpi : 96;
     g_scale = static_cast<double>(g_dpi) / 96.0;
+    g_state.privacyLayout.valid = false;
 
     if (g_editFont) {
         DeleteObject(g_editFont);
@@ -1236,6 +1284,197 @@ std::wstring StripInlineMarkdown(std::wstring text)
 {
     text.erase(std::remove(text.begin(), text.end(), L'`'), text.end());
     return text;
+}
+
+void TrimInlineWhitespace(std::wstring& text)
+{
+    while (!text.empty() && std::iswspace(text.front())) {
+        text.erase(text.begin());
+    }
+    while (!text.empty() && std::iswspace(text.back())) {
+        text.pop_back();
+    }
+}
+
+void TrimTrailingLineBreaks(std::wstring& text)
+{
+    while (!text.empty() && (text.back() == L'\r' || text.back() == L'\n')) {
+        text.pop_back();
+    }
+}
+
+struct PrivacyParseContext {
+    std::vector<PrivacyMarkdownBlock> blocks;
+    PrivacyMarkdownBlock current;
+    bool collecting = false;
+};
+
+void FinishPrivacyBlock(PrivacyParseContext& context)
+{
+    if (!context.collecting) {
+        return;
+    }
+
+    if (context.current.kind == PrivacyMarkdownBlockKind::Code) {
+        TrimTrailingLineBreaks(context.current.text);
+    } else {
+        TrimInlineWhitespace(context.current.text);
+    }
+
+    if (!context.current.text.empty()) {
+        context.blocks.push_back(std::move(context.current));
+    }
+    context.current = {};
+    context.collecting = false;
+}
+
+int PrivacyEnterBlock(MD_BLOCKTYPE type, void* detail, void* userdata)
+{
+    PrivacyParseContext& context = *static_cast<PrivacyParseContext*>(userdata);
+    if (context.collecting) {
+        return 0;
+    }
+
+    if (type == MD_BLOCK_H) {
+        context.current.kind = PrivacyMarkdownBlockKind::Heading;
+        context.current.headingLevel = static_cast<MD_BLOCK_H_DETAIL*>(detail)->level;
+        context.collecting = true;
+    } else if (type == MD_BLOCK_P) {
+        context.current.kind = PrivacyMarkdownBlockKind::Paragraph;
+        context.collecting = true;
+    } else if (type == MD_BLOCK_CODE) {
+        context.current.kind = PrivacyMarkdownBlockKind::Code;
+        context.collecting = true;
+    }
+    return 0;
+}
+
+int PrivacyLeaveBlock(MD_BLOCKTYPE type, void*, void* userdata)
+{
+    PrivacyParseContext& context = *static_cast<PrivacyParseContext*>(userdata);
+    const bool leavingCurrent =
+        (type == MD_BLOCK_H && context.current.kind == PrivacyMarkdownBlockKind::Heading)
+        || (type == MD_BLOCK_P && context.current.kind == PrivacyMarkdownBlockKind::Paragraph)
+        || (type == MD_BLOCK_CODE && context.current.kind == PrivacyMarkdownBlockKind::Code);
+    if (leavingCurrent) {
+        FinishPrivacyBlock(context);
+    }
+    return 0;
+}
+
+int PrivacyEnterSpan(MD_SPANTYPE, void*, void*)
+{
+    return 0;
+}
+
+int PrivacyLeaveSpan(MD_SPANTYPE, void*, void*)
+{
+    return 0;
+}
+
+int PrivacyText(MD_TEXTTYPE type, const MD_CHAR* text, MD_SIZE size, void* userdata)
+{
+    PrivacyParseContext& context = *static_cast<PrivacyParseContext*>(userdata);
+    if (!context.collecting) {
+        return 0;
+    }
+
+    if (type == MD_TEXT_NULLCHAR) {
+        context.current.text += L'\xfffd';
+    } else if (type == MD_TEXT_BR) {
+        context.current.text += L'\n';
+    } else if (type == MD_TEXT_SOFTBR && context.current.kind != PrivacyMarkdownBlockKind::Code) {
+        context.current.text += L' ';
+    } else if (type == MD_TEXT_SOFTBR) {
+        context.current.text += L'\n';
+    } else {
+        context.current.text.append(text, text + size);
+    }
+    return 0;
+}
+
+std::vector<PrivacyMarkdownBlock> ParsePrivacyMarkdownWithMd4c(const std::wstring& markdown)
+{
+    PrivacyParseContext context;
+    MD_PARSER parser {};
+    parser.flags = MD_FLAG_COLLAPSEWHITESPACE | MD_FLAG_NOHTML;
+    parser.enter_block = PrivacyEnterBlock;
+    parser.leave_block = PrivacyLeaveBlock;
+    parser.enter_span = PrivacyEnterSpan;
+    parser.leave_span = PrivacyLeaveSpan;
+    parser.text = PrivacyText;
+
+    const int result = md_parse(markdown.c_str(), static_cast<MD_SIZE>(markdown.size()), &parser, &context);
+    if (result != 0 || context.blocks.empty()) {
+        return {};
+    }
+    return context.blocks;
+}
+
+std::vector<PrivacyMarkdownBlock> ParsePrivacyMarkdownFallback(const std::wstring& markdown)
+{
+    const std::vector<std::wstring> lines = LinesOf(markdown);
+    std::vector<PrivacyMarkdownBlock> blocks;
+
+    for (size_t i = 0; i < lines.size();) {
+        const std::wstring& line = lines[i];
+        if (line.empty()) {
+            ++i;
+            continue;
+        }
+        if (StartsWith(line, L"# ")) {
+            PrivacyMarkdownBlock block;
+            block.kind = PrivacyMarkdownBlockKind::Heading;
+            block.headingLevel = 1;
+            block.text = line.substr(2);
+            blocks.push_back(std::move(block));
+            ++i;
+            continue;
+        }
+        if (StartsWith(line, L"## ")) {
+            PrivacyMarkdownBlock block;
+            block.kind = PrivacyMarkdownBlockKind::Heading;
+            block.headingLevel = 2;
+            block.text = line.substr(3);
+            blocks.push_back(std::move(block));
+            ++i;
+            continue;
+        }
+        if (StartsWith(line, L"```")) {
+            PrivacyMarkdownBlock block;
+            block.kind = PrivacyMarkdownBlockKind::Code;
+            for (++i; i < lines.size() && !StartsWith(lines[i], L"```"); ++i) {
+                if (!block.text.empty()) {
+                    block.text += L"\n";
+                }
+                block.text += lines[i];
+            }
+            if (i < lines.size()) {
+                ++i;
+            }
+            blocks.push_back(std::move(block));
+            continue;
+        }
+
+        PrivacyMarkdownBlock block;
+        block.kind = PrivacyMarkdownBlockKind::Paragraph;
+        block.text = StripInlineMarkdown(line);
+        for (++i; i < lines.size() && !lines[i].empty() && !StartsWith(lines[i], L"## ") && !StartsWith(lines[i], L"```"); ++i) {
+            block.text += L" " + StripInlineMarkdown(lines[i]);
+        }
+        blocks.push_back(std::move(block));
+    }
+
+    return blocks;
+}
+
+std::vector<PrivacyMarkdownBlock> ParsePrivacyMarkdown(const std::wstring& markdown)
+{
+    std::vector<PrivacyMarkdownBlock> blocks = ParsePrivacyMarkdownWithMd4c(markdown);
+    if (blocks.empty()) {
+        blocks = ParsePrivacyMarkdownFallback(markdown);
+    }
+    return blocks;
 }
 
 bool VerticallyVisible(double y, double height, const RECT& viewport)
@@ -2370,10 +2609,9 @@ void DrawAboutDialog(Graphics& g, const RECT& client, const Theme& t)
 
 void DrawPrivacyMarkdown(Graphics& g, const RECT& viewport, const Theme& t)
 {
-    const std::vector<std::wstring> lines = LinesOf(g_state.privacyMarkdown);
     const double left = Dip(viewport.left);
+    const double top = Dip(viewport.top);
     const double width = Dip(viewport.right - viewport.left) - 12;
-    double y = Dip(viewport.top) - g_state.privacyScroll;
     constexpr float bodySize = 12.0f;
     constexpr float headingSize = 12.5f;
     constexpr double headingTopGap = 6.0;
@@ -2383,10 +2621,6 @@ void DrawPrivacyMarkdown(Graphics& g, const RECT& viewport, const Theme& t)
     constexpr double paragraphGap = 9.0;
     constexpr double codeLineHeight = 22.0;
     constexpr double codeAfterGap = 10.0;
-
-    Region oldClip;
-    g.GetClip(&oldClip);
-    g.SetClip(RectFOf(viewport), CombineModeReplace);
 
     auto measureLine = [&](const std::wstring& value, float size, int style, const wchar_t* familyName = L"Segoe UI Variable Text") {
         FontFamily family(familyName);
@@ -2400,8 +2634,8 @@ void DrawPrivacyMarkdown(Graphics& g, const RECT& viewport, const Theme& t)
         return Dip(static_cast<int>(std::ceil(bounds.Width)));
     };
 
-    auto drawWrapped = [&](const std::wstring& value, float size, const Color& color, int style,
-                           double lineHeight, double afterGap) {
+    auto layoutWrapped = [&](std::vector<PrivacyLayoutText>& items, double& y, const std::wstring& value,
+                             PrivacyTextRole role, float size, int style, double lineHeight, double afterGap) {
         std::wistringstream words(value);
         std::wstring word;
         std::wstring line;
@@ -2410,9 +2644,7 @@ void DrawPrivacyMarkdown(Graphics& g, const RECT& viewport, const Theme& t)
         while (words >> word) {
             const std::wstring candidate = line.empty() ? word : line + L" " + word;
             if (!line.empty() && measureLine(candidate, size, style) > width) {
-                if (VerticallyVisible(y, lineHeight, viewport)) {
-                    DrawTextBlock(g, line, RectDip(left, y, width, lineHeight), size, color, style);
-                }
+                items.push_back({ role, line, y, lineHeight, size, style });
                 y += lineHeight;
                 drewLine = true;
                 line = word;
@@ -2422,9 +2654,7 @@ void DrawPrivacyMarkdown(Graphics& g, const RECT& viewport, const Theme& t)
         }
 
         if (!line.empty()) {
-            if (VerticallyVisible(y, lineHeight, viewport)) {
-                DrawTextBlock(g, line, RectDip(left, y, width, lineHeight), size, color, style);
-            }
+            items.push_back({ role, line, y, lineHeight, size, style });
             y += lineHeight;
             drewLine = true;
         }
@@ -2434,62 +2664,73 @@ void DrawPrivacyMarkdown(Graphics& g, const RECT& viewport, const Theme& t)
         }
     };
 
-    bool contentDrawn = false;
-    for (size_t i = 0; i < lines.size();) {
-        const std::wstring& line = lines[i];
-        if (StartsWith(line, L"# ")) {
-            ++i;
-            continue;
-        }
-        if (line.empty()) {
-            ++i;
-            continue;
-        }
-        if (StartsWith(line, L"## ")) {
-            if (contentDrawn) {
-                y += headingTopGap;
-            }
-            drawWrapped(line.substr(3), headingSize, t.fg, FontStyleBold, headingLineHeight, headingAfterGap);
-            contentDrawn = true;
-            ++i;
-            continue;
-        }
-        if (StartsWith(line, L"```")) {
-            std::wstring code;
-            size_t codeLines = 0;
-            for (++i; i < lines.size() && !StartsWith(lines[i], L"```"); ++i) {
-                if (!code.empty()) {
-                    code += L"\n";
+    PrivacyLayoutCache& cache = g_state.privacyLayout;
+    const int widthPx = viewport.right - viewport.left;
+    if (!cache.valid || cache.dpi != g_dpi || cache.widthPx != widthPx || cache.source != g_state.privacyMarkdown) {
+        cache = {};
+        cache.valid = true;
+        cache.dpi = g_dpi;
+        cache.widthPx = widthPx;
+        cache.source = g_state.privacyMarkdown;
+
+        double y = 0;
+        bool contentDrawn = false;
+        for (const PrivacyMarkdownBlock& block : ParsePrivacyMarkdown(g_state.privacyMarkdown)) {
+            if (block.kind == PrivacyMarkdownBlockKind::Heading) {
+                if (block.headingLevel <= 1) {
+                    continue;
                 }
-                code += lines[i];
-                ++codeLines;
+                if (contentDrawn) {
+                    y += headingTopGap;
+                }
+                layoutWrapped(cache.text, y, block.text, PrivacyTextRole::Heading,
+                    headingSize, FontStyleBold, headingLineHeight, headingAfterGap);
+                contentDrawn = true;
+            } else if (block.kind == PrivacyMarkdownBlockKind::Code) {
+                const std::vector<std::wstring> codeLines = LinesOf(block.text);
+                const size_t lineCount = std::max<size_t>(1, codeLines.size());
+                const double boxHeight = std::max(42.0, 18.0 + lineCount * codeLineHeight);
+                cache.code.push_back({ block.text, y, boxHeight });
+                y += boxHeight + codeAfterGap;
+                contentDrawn = true;
+            } else {
+                layoutWrapped(cache.text, y, block.text, PrivacyTextRole::Body,
+                    bodySize, FontStyleRegular, bodyLineHeight, paragraphGap);
+                contentDrawn = true;
             }
-            if (i < lines.size()) {
-                ++i;
-            }
+        }
 
-            const double boxHeight = std::max(42.0, 18.0 + codeLines * codeLineHeight);
-            if (VerticallyVisible(y, boxHeight, viewport)) {
-                DrawRoundedBorder(g, RectDip(left, y, width, boxHeight), 5, t.ctrl, t.ctrlBorder);
-                DrawTextBlockWithFamily(g, code, RectDip(left + 16, y + 9, width - 32, boxHeight - 16),
-                    bodySize, t.fg, FontStyleBold, L"Consolas");
-            }
-            y += boxHeight + codeAfterGap;
-            contentDrawn = true;
+        cache.contentHeight = y;
+    }
+
+    const double viewportHeight = Dip(viewport.bottom - viewport.top);
+    const double maxScroll = std::max(0.0, cache.contentHeight - viewportHeight);
+    g_state.privacyScroll = std::max(0.0, std::min(maxScroll, g_state.privacyScroll));
+    g_state.privacyContentHeight = cache.contentHeight;
+
+    Region oldClip;
+    g.GetClip(&oldClip);
+    g.SetClip(RectFOf(viewport), CombineModeReplace);
+
+    for (const PrivacyLayoutCode& code : cache.code) {
+        const double y = top + code.y - g_state.privacyScroll;
+        if (VerticallyVisible(y, code.h, viewport)) {
+            DrawRoundedBorder(g, RectDip(left, y, width, code.h), 5, t.ctrl, t.ctrlBorder);
+            DrawTextBlockWithFamily(g, code.text, RectDip(left + 16, y + 9, width - 32, code.h - 16),
+                bodySize, t.fg, FontStyleBold, L"Consolas");
+        }
+    }
+
+    for (const PrivacyLayoutText& item : cache.text) {
+        const double y = top + item.y - g_state.privacyScroll;
+        if (!VerticallyVisible(y, item.h, viewport)) {
             continue;
         }
-
-        std::wstring paragraph = StripInlineMarkdown(line);
-        for (++i; i < lines.size() && !lines[i].empty() && !StartsWith(lines[i], L"## ") && !StartsWith(lines[i], L"```"); ++i) {
-            paragraph += L" " + StripInlineMarkdown(lines[i]);
-        }
-
-        drawWrapped(paragraph, bodySize, t.fg2, FontStyleRegular, bodyLineHeight, paragraphGap);
-        contentDrawn = true;
+        const Color color = item.role == PrivacyTextRole::Heading ? t.fg : t.fg2;
+        DrawTextBlock(g, item.text, RectDip(left, y, width, item.h), item.size, color, item.style);
     }
 
     g.SetClip(&oldClip, CombineModeReplace);
-    g_state.privacyContentHeight = std::max(0.0, y + g_state.privacyScroll - Dip(viewport.top));
 }
 
 void DrawPrivacyScrollbar(Graphics& g, const Theme& t)

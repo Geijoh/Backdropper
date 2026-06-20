@@ -12,6 +12,8 @@ if(NOT BACKDROPPER_VERSION)
 endif()
 message(STATUS "Backdropper version: ${BACKDROPPER_VERSION}")
 
+set_source_files_properties(third_party/md4c/md4c.c PROPERTIES LANGUAGE CXX)
+
 foreach(config Debug Release RelWithDebInfo MinSizeRel)
   string(TOUPPER "${config}" config_upper)
   set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_${config_upper} "${CMAKE_BINARY_DIR}/bin")
@@ -37,10 +39,11 @@ add_executable(BackdropperSettings WIN32
   src/common/format_support.cpp
   src/common/settings.cpp
   src/common/thumbnail_cache.cpp
+  third_party/md4c/md4c.c
 )
-target_compile_definitions(BackdropperSettings PRIVATE UNICODE _UNICODE NOMINMAX)
+target_compile_definitions(BackdropperSettings PRIVATE UNICODE _UNICODE NOMINMAX MD4C_USE_UTF16)
 target_compile_definitions(BackdropperSettings PRIVATE BACKDROPPER_VERSION="${BACKDROPPER_VERSION}")
-target_include_directories(BackdropperSettings PRIVATE src/common src/resources)
+target_include_directories(BackdropperSettings PRIVATE src/common src/resources third_party/md4c)
 target_link_libraries(BackdropperSettings PRIVATE comctl32 shell32 shlwapi ole32 gdiplus dwmapi comdlg32 urlmon)
 target_link_options(BackdropperSettings PRIVATE
   "/MANIFESTDEPENDENCY:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'"
