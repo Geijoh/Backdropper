@@ -9,7 +9,11 @@
 #include <commdlg.h>
 #include <dwmapi.h>
 #include <gdiplus.h>
+#include <oleacc.h>
 #include <shlwapi.h>
+#include <UIAutomationClient.h>
+#include <UIAutomationCoreApi.h>
+#include <uiautomationcore.h>
 #include <urlmon.h>
 
 #include "md4c.h"
@@ -22,8 +26,10 @@
 #include <cwctype>
 #include <fstream>
 #include <iterator>
+#include <memory>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -35,6 +41,9 @@ constexpr int IdSolidColor = 200;
 constexpr int IdCheckerA = 201;
 constexpr int IdCheckerB = 202;
 constexpr int IdCheckerSize = 203;
+constexpr UINT WmUpdateCheckResult = WM_APP + 1;
+constexpr UINT WmRunUpdateCheck = WM_APP + 2;
+constexpr UINT WmAccessibleInvoke = WM_APP + 3;
 
 constexpr wchar_t kThumbHandlerKey[] = L"{E357FCCD-A995-4576-B01F-234630154E96}";
 constexpr wchar_t kBackdropperClsid[] = L"{7F08B58C-8D1C-44D3-9A73-AB554FF53B1D}";
@@ -163,6 +172,17 @@ struct PrivacyLayoutCache {
     double contentHeight = 0;
 };
 
+struct RegistrationSummary {
+    bool currentDll = false;
+    size_t expected = 0;
+    size_t active = 0;
+};
+
+struct UpdateCheckResult {
+    bool ok = false;
+    std::wstring latest;
+};
+
 constexpr std::array<size_t, kBackdropperFormatCount> kFormatsDialogOrder = {
     0, 2, 4, 6, 8, 10,
     1, 3, 5, 7, 9, 11,
@@ -278,6 +298,7 @@ struct AppState {
     bool dark = false;
     bool matchSystemTheme = true;
     bool registered = false;
+    RegistrationSummary registration;
     bool viewMenuOpen = false;
     ViewMode view = ViewMode::Large;
     std::wstring dialogTitle;
@@ -285,6 +306,7 @@ struct AppState {
     std::wstring updateStatus;
     std::wstring latestVersion;
     bool updateAvailable = false;
+    bool updateCheckInProgress = false;
     bool aboutOpen = false;
     bool privacyOpen = false;
     bool formatsOpen = false;
@@ -312,11 +334,20 @@ HBRUSH g_editBrush = nullptr;
 Layout g_layout;
 AppState g_state;
 Hit g_hover = Hit::None;
+Hit g_focus = Hit::None;
+bool g_keyboardFocusVisible = false;
 bool g_trackingMouse = false;
 
 void LayoutChildWindows(HWND window);
+void CalculateLayout(HWND window);
+Hit HitTest(POINT pt);
 void OpenDialog(HWND window, const std::wstring& title, const std::wstring& body);
+bool DialogOpen();
+bool AboutOpen();
+bool PrivacyOpen();
 double MeasureWrappedTextHeightDip(const std::wstring& text, double widthDip, float sizeDip, int style);
+void InvalidateHoverRect(HWND window, Hit hit);
+void ActivateHit(HWND window, Hit hit);
 
 int Px(double dip)
 {
@@ -747,6 +778,743 @@ RECT HoverRect(Hit hit)
     }
 }
 
+std::vector<Hit> FocusableHits()
+{
+    if (PrivacyOpen()) {
+        return { Hit::PrivacyClose };
+    }
+    if (g_state.formatsOpen) {
+        std::vector<Hit> hits;
+        hits.push_back(Hit::FormatClose);
+        for (size_t i = 0; i < kBackdropperFormatCount; ++i) {
+            if (g_state.formatAvailable[i]) {
+                hits.push_back(static_cast<Hit>(static_cast<int>(Hit::FormatPng) + static_cast<int>(i)));
+            }
+        }
+        if (!g_state.ghostscriptInstalled) {
+            hits.push_back(Hit::GhostscriptLink);
+        }
+        hits.push_back(Hit::FormatDone);
+        return hits;
+    }
+    if (AboutOpen()) {
+        return { Hit::AboutClose, Hit::AboutGithub, Hit::AboutPrivacy };
+    }
+    if (DialogOpen()) {
+        return { Hit::DialogOk };
+    }
+
+    std::vector<Hit> hits {
+        Hit::MatchSystem,
+        Hit::About,
+    };
+    if (!g_state.matchSystemTheme) {
+        hits.push_back(Hit::Theme);
+    }
+    hits.insert(hits.end(), {
+        Hit::SegNone,
+        Hit::SegSolid,
+        Hit::SegChecker,
+    });
+    if (g_state.settings.mode == BackdropMode::Solid) {
+        hits.push_back(Hit::SolidSwatch);
+    } else if (g_state.settings.mode == BackdropMode::Checker) {
+        hits.push_back(Hit::CheckerASwatch);
+        hits.push_back(Hit::CheckerBSwatch);
+        hits.push_back(Hit::SizeDown);
+        hits.push_back(Hit::SizeUp);
+    }
+    hits.insert(hits.end(), {
+        Hit::FormatManage,
+        Hit::RestartToggle,
+        Hit::AutoCheckToggle,
+        Hit::CheckUpdates,
+    });
+    if (UpdateButtonVisible()) {
+        hits.push_back(Hit::InstallUpdate);
+    }
+    hits.insert(hits.end(), {
+        Hit::ViewButton,
+        Hit::Register,
+    });
+    if (g_state.registered) {
+        hits.push_back(Hit::Unregister);
+    }
+    hits.push_back(Hit::Save);
+    return hits;
+}
+
+bool FocusableContains(Hit hit, const std::vector<Hit>& hits)
+{
+    return std::find(hits.begin(), hits.end(), hit) != hits.end();
+}
+
+std::wstring AccessibleName(Hit hit)
+{
+    switch (hit) {
+    case Hit::MatchSystem: return L"Match system theme";
+    case Hit::Theme: return L"Theme";
+    case Hit::SegNone: return L"No background";
+    case Hit::SegSolid: return L"Solid background";
+    case Hit::SegChecker: return L"Checker background";
+    case Hit::SolidSwatch: return L"Choose solid color";
+    case Hit::CheckerASwatch: return L"Choose checker color A";
+    case Hit::CheckerBSwatch: return L"Choose checker color B";
+    case Hit::SizeDown: return L"Decrease checker size";
+    case Hit::SizeUp: return L"Increase checker size";
+    case Hit::RestartToggle: return L"Restart Explorer and clear thumbnail cache on save";
+    case Hit::AutoCheckToggle: return L"Check for updates automatically";
+    case Hit::CheckUpdates: return L"Check for updates now";
+    case Hit::InstallUpdate: return ForceUpdateVisible() ? L"Force update" : L"Install update";
+    case Hit::ViewButton: return L"Preview view menu";
+    case Hit::About: return L"About";
+    case Hit::AboutClose: return L"Close About";
+    case Hit::AboutGithub: return L"Open GitHub";
+    case Hit::AboutPrivacy: return L"Open privacy policy";
+    case Hit::PrivacyClose: return L"Close privacy policy";
+    case Hit::FormatManage: return L"Manage supported formats";
+    case Hit::FormatClose: return L"Close supported formats";
+    case Hit::FormatDone: return L"Done";
+    case Hit::GhostscriptLink: return L"Download Ghostscript";
+    case Hit::Register: return L"Register formats";
+    case Hit::Unregister: return L"Unregister formats";
+    case Hit::Save: return L"Save settings";
+    case Hit::DialogOk: return L"OK";
+    case Hit::FormatPng:
+    case Hit::FormatWebp:
+    case Hit::FormatGif:
+    case Hit::FormatIco:
+    case Hit::FormatSvg:
+    case Hit::FormatPsd:
+    case Hit::FormatAi:
+    case Hit::FormatEps:
+    case Hit::FormatPdf:
+    case Hit::FormatAvif:
+    case Hit::FormatTga:
+    case Hit::FormatDds: {
+        const int index = FormatIndexFromHit(hit);
+        return index >= 0 ? std::wstring(L"Toggle ") + BackdropperFormatLabel(kBackdropperFormats[index]) : L"Toggle format";
+    }
+    default: return {};
+    }
+}
+
+bool HitIsToggle(Hit hit)
+{
+    const int formatIndex = FormatIndexFromHit(hit);
+    return hit == Hit::MatchSystem
+        || hit == Hit::RestartToggle
+        || hit == Hit::AutoCheckToggle
+        || formatIndex >= 0;
+}
+
+bool HitIsChecked(Hit hit)
+{
+    const int formatIndex = FormatIndexFromHit(hit);
+    if (hit == Hit::MatchSystem) return g_state.matchSystemTheme;
+    if (hit == Hit::RestartToggle) return g_state.settings.deleteThumbnailDbsOnSave;
+    if (hit == Hit::AutoCheckToggle) return g_state.settings.checkUpdatesAutomatically;
+    if (formatIndex >= 0) return EffectiveFormatEnabled(static_cast<size_t>(formatIndex));
+    return false;
+}
+
+class AccessibleRoot final : public IAccessible {
+public:
+    explicit AccessibleRoot(HWND window) : window_(window) {}
+
+    IFACEMETHODIMP QueryInterface(REFIID riid, void** object) override
+    {
+        if (!object) {
+            return E_POINTER;
+        }
+        *object = nullptr;
+        if (riid == IID_IUnknown || riid == IID_IDispatch || riid == IID_IAccessible) {
+            *object = static_cast<IAccessible*>(this);
+            AddRef();
+            return S_OK;
+        }
+        return E_NOINTERFACE;
+    }
+
+    IFACEMETHODIMP_(ULONG) AddRef() override { return InterlockedIncrement(&refs_); }
+
+    IFACEMETHODIMP_(ULONG) Release() override
+    {
+        const ULONG refs = InterlockedDecrement(&refs_);
+        if (!refs) {
+            delete this;
+        }
+        return refs;
+    }
+
+    IFACEMETHODIMP GetTypeInfoCount(UINT* count) override
+    {
+        if (!count) return E_POINTER;
+        *count = 0;
+        return S_OK;
+    }
+    IFACEMETHODIMP GetTypeInfo(UINT, LCID, ITypeInfo**) override { return E_NOTIMPL; }
+    IFACEMETHODIMP GetIDsOfNames(REFIID, LPOLESTR*, UINT, LCID, DISPID*) override { return E_NOTIMPL; }
+    IFACEMETHODIMP Invoke(DISPID, REFIID, LCID, WORD, DISPPARAMS*, VARIANT*, EXCEPINFO*, UINT*) override { return E_NOTIMPL; }
+
+    IFACEMETHODIMP get_accParent(IDispatch** parent) override
+    {
+        if (!parent) return E_POINTER;
+        *parent = nullptr;
+        return S_FALSE;
+    }
+
+    IFACEMETHODIMP get_accChildCount(long* count) override
+    {
+        if (!count) return E_POINTER;
+        *count = static_cast<long>(FocusableHits().size());
+        return S_OK;
+    }
+
+    IFACEMETHODIMP get_accChild(VARIANT, IDispatch** child) override
+    {
+        if (!child) return E_POINTER;
+        *child = nullptr;
+        return S_FALSE;
+    }
+
+    IFACEMETHODIMP get_accName(VARIANT child, BSTR* name) override
+    {
+        if (!name) return E_POINTER;
+        const Hit hit = HitFromChild(child);
+        const std::wstring value = hit == Hit::None ? L"Backdropper Settings" : AccessibleName(hit);
+        *name = SysAllocString(value.c_str());
+        return *name ? S_OK : E_OUTOFMEMORY;
+    }
+
+    IFACEMETHODIMP get_accValue(VARIANT, BSTR* value) override
+    {
+        if (!value) return E_POINTER;
+        *value = nullptr;
+        return S_FALSE;
+    }
+
+    IFACEMETHODIMP get_accDescription(VARIANT child, BSTR* description) override
+    {
+        return get_accName(child, description);
+    }
+
+    IFACEMETHODIMP get_accRole(VARIANT child, VARIANT* role) override
+    {
+        if (!role) return E_POINTER;
+        VariantInit(role);
+        role->vt = VT_I4;
+        const Hit hit = HitFromChild(child);
+        role->lVal = hit == Hit::None ? ROLE_SYSTEM_CLIENT
+            : (HitIsToggle(hit) ? ROLE_SYSTEM_CHECKBUTTON : ROLE_SYSTEM_PUSHBUTTON);
+        return S_OK;
+    }
+
+    IFACEMETHODIMP get_accState(VARIANT child, VARIANT* state) override
+    {
+        if (!state) return E_POINTER;
+        VariantInit(state);
+        state->vt = VT_I4;
+        const Hit hit = HitFromChild(child);
+        long value = hit == Hit::None ? 0 : STATE_SYSTEM_FOCUSABLE;
+        if (hit == g_focus) value |= STATE_SYSTEM_FOCUSED;
+        if (HitIsToggle(hit) && HitIsChecked(hit)) value |= STATE_SYSTEM_CHECKED;
+        state->lVal = value;
+        return S_OK;
+    }
+
+    IFACEMETHODIMP get_accHelp(VARIANT, BSTR* help) override
+    {
+        if (!help) return E_POINTER;
+        *help = nullptr;
+        return S_FALSE;
+    }
+    IFACEMETHODIMP get_accHelpTopic(BSTR* helpFile, VARIANT, long* topic) override
+    {
+        if (helpFile) *helpFile = nullptr;
+        if (topic) *topic = 0;
+        return S_FALSE;
+    }
+    IFACEMETHODIMP get_accKeyboardShortcut(VARIANT, BSTR* shortcut) override
+    {
+        if (!shortcut) return E_POINTER;
+        *shortcut = SysAllocString(L"Tab");
+        return *shortcut ? S_OK : E_OUTOFMEMORY;
+    }
+
+    IFACEMETHODIMP get_accFocus(VARIANT* focus) override
+    {
+        if (!focus) return E_POINTER;
+        VariantInit(focus);
+        focus->vt = VT_I4;
+        focus->lVal = ChildFromHit(g_focus);
+        return S_OK;
+    }
+
+    IFACEMETHODIMP get_accSelection(VARIANT* selection) override
+    {
+        if (!selection) return E_POINTER;
+        VariantInit(selection);
+        selection->vt = VT_EMPTY;
+        return S_FALSE;
+    }
+
+    IFACEMETHODIMP get_accDefaultAction(VARIANT child, BSTR* action) override
+    {
+        if (!action) return E_POINTER;
+        *action = SysAllocString(HitIsToggle(HitFromChild(child)) ? L"Toggle" : L"Press");
+        return *action ? S_OK : E_OUTOFMEMORY;
+    }
+
+    IFACEMETHODIMP accSelect(long flags, VARIANT child) override
+    {
+        if ((flags & SELFLAG_TAKEFOCUS) == 0) {
+            return S_FALSE;
+        }
+        const Hit hit = HitFromChild(child);
+        if (hit == Hit::None) {
+            return E_INVALIDARG;
+        }
+        g_focus = hit;
+        g_keyboardFocusVisible = true;
+        SetFocus(window_);
+        NotifyWinEvent(EVENT_OBJECT_FOCUS, window_, OBJID_CLIENT, ChildFromHit(hit));
+        InvalidateRect(window_, nullptr, FALSE);
+        return S_OK;
+    }
+
+    IFACEMETHODIMP accLocation(long* left, long* top, long* width, long* height, VARIANT child) override
+    {
+        if (!left || !top || !width || !height) return E_POINTER;
+        CalculateLayout(window_);
+        RECT rect = {};
+        const Hit hit = HitFromChild(child);
+        if (hit == Hit::None) {
+            GetClientRect(window_, &rect);
+        } else {
+            rect = HoverRect(hit);
+        }
+        POINT pt { rect.left, rect.top };
+        ClientToScreen(window_, &pt);
+        *left = pt.x;
+        *top = pt.y;
+        *width = rect.right - rect.left;
+        *height = rect.bottom - rect.top;
+        return S_OK;
+    }
+
+    IFACEMETHODIMP accNavigate(long, VARIANT, VARIANT* end) override
+    {
+        if (!end) return E_POINTER;
+        VariantInit(end);
+        end->vt = VT_EMPTY;
+        return S_FALSE;
+    }
+
+    IFACEMETHODIMP accHitTest(long x, long y, VARIANT* child) override
+    {
+        if (!child) return E_POINTER;
+        POINT pt { x, y };
+        ScreenToClient(window_, &pt);
+        CalculateLayout(window_);
+        const Hit hit = HitTest(pt);
+        VariantInit(child);
+        child->vt = VT_I4;
+        child->lVal = ChildFromHit(hit);
+        return S_OK;
+    }
+
+    IFACEMETHODIMP accDoDefaultAction(VARIANT child) override
+    {
+        const Hit hit = HitFromChild(child);
+        if (hit == Hit::None) {
+            return E_INVALIDARG;
+        }
+        g_focus = hit;
+        g_keyboardFocusVisible = true;
+        ActivateHit(window_, hit);
+        NotifyWinEvent(EVENT_OBJECT_FOCUS, window_, OBJID_CLIENT, ChildFromHit(hit));
+        return S_OK;
+    }
+
+    IFACEMETHODIMP put_accName(VARIANT, BSTR) override { return E_NOTIMPL; }
+    IFACEMETHODIMP put_accValue(VARIANT, BSTR) override { return E_NOTIMPL; }
+
+private:
+    static long ChildFromHit(Hit hit)
+    {
+        const std::vector<Hit> hits = FocusableHits();
+        const auto found = std::find(hits.begin(), hits.end(), hit);
+        return found == hits.end() ? CHILDID_SELF : static_cast<long>((found - hits.begin()) + 1);
+    }
+
+    static Hit HitFromChild(VARIANT child)
+    {
+        if (child.vt != VT_I4 || child.lVal == CHILDID_SELF) {
+            return Hit::None;
+        }
+        const std::vector<Hit> hits = FocusableHits();
+        const long index = child.lVal - 1;
+        return index >= 0 && static_cast<size_t>(index) < hits.size()
+            ? hits[static_cast<size_t>(index)]
+            : Hit::None;
+    }
+
+    long refs_ = 1;
+    HWND window_ = nullptr;
+};
+
+class UiaProvider final : public IRawElementProviderSimple,
+                          public IRawElementProviderFragmentRoot,
+                          public IRawElementProviderFragment,
+                          public IInvokeProvider,
+                          public IToggleProvider {
+public:
+    UiaProvider(HWND window, Hit hit) : window_(window), hit_(hit) {}
+
+    IFACEMETHODIMP QueryInterface(REFIID riid, void** object) override
+    {
+        if (!object) return E_POINTER;
+        *object = nullptr;
+        if (riid == IID_IUnknown || riid == __uuidof(IRawElementProviderSimple)) {
+            *object = static_cast<IRawElementProviderSimple*>(this);
+        } else if (riid == __uuidof(IRawElementProviderFragmentRoot) && hit_ == Hit::None) {
+            *object = static_cast<IRawElementProviderFragmentRoot*>(this);
+        } else if (riid == __uuidof(IRawElementProviderFragment)) {
+            *object = static_cast<IRawElementProviderFragment*>(this);
+        } else if (riid == __uuidof(IInvokeProvider) && hit_ != Hit::None && !HitIsToggle(hit_)) {
+            *object = static_cast<IInvokeProvider*>(this);
+        } else if (riid == __uuidof(IToggleProvider) && HitIsToggle(hit_)) {
+            *object = static_cast<IToggleProvider*>(this);
+        } else {
+            return E_NOINTERFACE;
+        }
+        AddRef();
+        return S_OK;
+    }
+
+    IFACEMETHODIMP_(ULONG) AddRef() override { return InterlockedIncrement(&refs_); }
+
+    IFACEMETHODIMP_(ULONG) Release() override
+    {
+        const ULONG refs = InterlockedDecrement(&refs_);
+        if (!refs) {
+            delete this;
+        }
+        return refs;
+    }
+
+    IFACEMETHODIMP get_ProviderOptions(ProviderOptions* value) override
+    {
+        if (!value) return E_POINTER;
+        *value = ProviderOptions_ServerSideProvider;
+        return S_OK;
+    }
+
+    IFACEMETHODIMP GetPatternProvider(PATTERNID patternId, IUnknown** value) override
+    {
+        if (!value) return E_POINTER;
+        *value = nullptr;
+        if (hit_ == Hit::None) {
+            return S_OK;
+        }
+        if (patternId == UIA_TogglePatternId && HitIsToggle(hit_)) {
+            *value = static_cast<IToggleProvider*>(this);
+        } else if (patternId == UIA_InvokePatternId && !HitIsToggle(hit_)) {
+            *value = static_cast<IInvokeProvider*>(this);
+        }
+        if (*value) {
+            AddRef();
+        }
+        return S_OK;
+    }
+
+    IFACEMETHODIMP GetPropertyValue(PROPERTYID propertyId, VARIANT* value) override
+    {
+        if (!value) return E_POINTER;
+        VariantInit(value);
+        if (propertyId == UIA_NamePropertyId) {
+            value->vt = VT_BSTR;
+            value->bstrVal = SysAllocString(hit_ == Hit::None ? L"Backdropper Settings" : AccessibleName(hit_).c_str());
+            return value->bstrVal ? S_OK : E_OUTOFMEMORY;
+        }
+        if (propertyId == UIA_AutomationIdPropertyId) {
+            value->vt = VT_BSTR;
+            value->bstrVal = SysAllocString(AutomationId().c_str());
+            return value->bstrVal ? S_OK : E_OUTOFMEMORY;
+        }
+        if (propertyId == UIA_ControlTypePropertyId) {
+            value->vt = VT_I4;
+            value->lVal = ControlType();
+            return S_OK;
+        }
+        if (propertyId == UIA_IsControlElementPropertyId
+            || propertyId == UIA_IsContentElementPropertyId
+            || propertyId == UIA_IsKeyboardFocusablePropertyId
+            || propertyId == UIA_IsEnabledPropertyId) {
+            value->vt = VT_BOOL;
+            value->boolVal = VARIANT_TRUE;
+            return S_OK;
+        }
+        if (propertyId == UIA_HasKeyboardFocusPropertyId) {
+            value->vt = VT_BOOL;
+            value->boolVal = hit_ != Hit::None && hit_ == g_focus ? VARIANT_TRUE : VARIANT_FALSE;
+            return S_OK;
+        }
+        if (propertyId == UIA_ToggleToggleStatePropertyId) {
+            if (HitIsToggle(hit_)) {
+                value->vt = VT_I4;
+                value->lVal = HitIsChecked(hit_) ? ToggleState_On : ToggleState_Off;
+            }
+            return S_OK;
+        }
+        return S_OK;
+    }
+
+    IFACEMETHODIMP get_HostRawElementProvider(IRawElementProviderSimple** value) override
+    {
+        if (!value) return E_POINTER;
+        *value = nullptr;
+        return hit_ == Hit::None ? UiaHostProviderFromHwnd(window_, value) : S_OK;
+    }
+
+    IFACEMETHODIMP Navigate(NavigateDirection direction, IRawElementProviderFragment** value) override
+    {
+        if (!value) return E_POINTER;
+        *value = nullptr;
+
+        const std::vector<Hit> hits = FocusableHits();
+        if (hit_ == Hit::None) {
+            if (direction == NavigateDirection_FirstChild && !hits.empty()) {
+                *value = NewFragment(hits.front());
+            } else if (direction == NavigateDirection_LastChild && !hits.empty()) {
+                *value = NewFragment(hits.back());
+            }
+            return S_OK;
+        }
+
+        if (direction == NavigateDirection_Parent) {
+            *value = NewFragment(Hit::None);
+            return S_OK;
+        }
+
+        const auto found = std::find(hits.begin(), hits.end(), hit_);
+        if (found == hits.end()) {
+            return S_OK;
+        }
+        if (direction == NavigateDirection_NextSibling && found + 1 != hits.end()) {
+            *value = NewFragment(*(found + 1));
+        } else if (direction == NavigateDirection_PreviousSibling && found != hits.begin()) {
+            *value = NewFragment(*(found - 1));
+        }
+        return S_OK;
+    }
+
+    IFACEMETHODIMP GetRuntimeId(SAFEARRAY** value) override
+    {
+        if (!value) return E_POINTER;
+        const int id = hit_ == Hit::None ? 0 : static_cast<int>(hit_) + 1;
+        *value = MakeRuntimeId({ UiaAppendRuntimeId, id });
+        return *value ? S_OK : E_OUTOFMEMORY;
+    }
+
+    IFACEMETHODIMP get_BoundingRectangle(UiaRect* value) override
+    {
+        if (!value) return E_POINTER;
+        CalculateLayout(window_);
+
+        RECT rect = {};
+        if (hit_ == Hit::None) {
+            GetClientRect(window_, &rect);
+        } else {
+            rect = HoverRect(hit_);
+        }
+
+        POINT pt { rect.left, rect.top };
+        ClientToScreen(window_, &pt);
+        value->left = static_cast<double>(pt.x);
+        value->top = static_cast<double>(pt.y);
+        value->width = static_cast<double>(rect.right - rect.left);
+        value->height = static_cast<double>(rect.bottom - rect.top);
+        return S_OK;
+    }
+
+    IFACEMETHODIMP GetEmbeddedFragmentRoots(SAFEARRAY** value) override
+    {
+        if (!value) return E_POINTER;
+        *value = nullptr;
+        return S_OK;
+    }
+
+    IFACEMETHODIMP SetFocus() override
+    {
+        if (hit_ == Hit::None) {
+            ::SetFocus(window_);
+            return S_OK;
+        }
+        g_focus = hit_;
+        g_keyboardFocusVisible = true;
+        ::SetFocus(window_);
+        NotifyWinEvent(EVENT_OBJECT_FOCUS, window_, OBJID_CLIENT, static_cast<LONG>(hit_) + 1);
+        InvalidateRect(window_, nullptr, FALSE);
+        return S_OK;
+    }
+
+    IFACEMETHODIMP get_FragmentRoot(IRawElementProviderFragmentRoot** value) override
+    {
+        if (!value) return E_POINTER;
+        if (hit_ == Hit::None) {
+            *value = static_cast<IRawElementProviderFragmentRoot*>(this);
+            AddRef();
+        } else {
+            *value = new UiaProvider(window_, Hit::None);
+        }
+        return *value ? S_OK : E_OUTOFMEMORY;
+    }
+
+    IFACEMETHODIMP ElementProviderFromPoint(double x, double y, IRawElementProviderFragment** value) override
+    {
+        if (!value) return E_POINTER;
+        POINT pt { static_cast<LONG>(x), static_cast<LONG>(y) };
+        ScreenToClient(window_, &pt);
+        CalculateLayout(window_);
+        const Hit hit = HitTest(pt);
+        const std::vector<Hit> hits = FocusableHits();
+        *value = FocusableContains(hit, hits) ? NewFragment(hit) : NewFragment(Hit::None);
+        return *value ? S_OK : E_OUTOFMEMORY;
+    }
+
+    IFACEMETHODIMP GetFocus(IRawElementProviderFragment** value) override
+    {
+        if (!value) return E_POINTER;
+        const std::vector<Hit> hits = FocusableHits();
+        *value = FocusableContains(g_focus, hits) ? NewFragment(g_focus) : nullptr;
+        return S_OK;
+    }
+
+    IFACEMETHODIMP Invoke() override
+    {
+        return PostAccessibleInvoke();
+    }
+
+    IFACEMETHODIMP Toggle() override
+    {
+        return PostAccessibleInvoke();
+    }
+
+    IFACEMETHODIMP get_ToggleState(ToggleState* value) override
+    {
+        if (!value) return E_POINTER;
+        if (!HitIsToggle(hit_)) return E_INVALIDARG;
+        *value = HitIsChecked(hit_) ? ToggleState_On : ToggleState_Off;
+        return S_OK;
+    }
+
+private:
+    IRawElementProviderFragment* NewFragment(Hit hit) const
+    {
+        return static_cast<IRawElementProviderFragment*>(new UiaProvider(window_, hit));
+    }
+
+    std::wstring AutomationId() const
+    {
+        if (hit_ == Hit::None) {
+            return L"BackdropperSettings";
+        }
+        return L"Backdropper." + std::to_wstring(static_cast<int>(hit_));
+    }
+
+    CONTROLTYPEID ControlType() const
+    {
+        if (hit_ == Hit::None) return UIA_PaneControlTypeId;
+        return HitIsToggle(hit_) ? UIA_CheckBoxControlTypeId : UIA_ButtonControlTypeId;
+    }
+
+    HRESULT PostAccessibleInvoke()
+    {
+        if (hit_ == Hit::None) {
+            return E_INVALIDARG;
+        }
+        return PostMessageW(window_, WmAccessibleInvoke, static_cast<WPARAM>(hit_), 0) ? S_OK : HRESULT_FROM_WIN32(GetLastError());
+    }
+
+    static SAFEARRAY* MakeRuntimeId(const std::vector<int>& values)
+    {
+        SAFEARRAY* array = SafeArrayCreateVector(VT_I4, 0, static_cast<ULONG>(values.size()));
+        if (!array) {
+            return nullptr;
+        }
+        for (LONG i = 0; i < static_cast<LONG>(values.size()); ++i) {
+            int value = values[static_cast<size_t>(i)];
+            if (FAILED(SafeArrayPutElement(array, &i, &value))) {
+                SafeArrayDestroy(array);
+                return nullptr;
+            }
+        }
+        return array;
+    }
+
+    long refs_ = 1;
+    HWND window_ = nullptr;
+    Hit hit_ = Hit::None;
+};
+
+void EnsureKeyboardFocus(HWND window)
+{
+    const std::vector<Hit> hits = FocusableHits();
+    if (hits.empty()) {
+        g_focus = Hit::None;
+        return;
+    }
+    if (!FocusableContains(g_focus, hits)) {
+        const Hit old = g_focus;
+        g_focus = hits.front();
+        InvalidateHoverRect(window, old);
+        InvalidateHoverRect(window, g_focus);
+    }
+}
+
+void MoveKeyboardFocus(HWND window, bool reverse)
+{
+    g_keyboardFocusVisible = true;
+    const std::vector<Hit> hits = FocusableHits();
+    if (hits.empty()) {
+        return;
+    }
+
+    auto current = std::find(hits.begin(), hits.end(), g_focus);
+    const Hit old = g_focus;
+    if (current == hits.end()) {
+        g_focus = reverse ? hits.back() : hits.front();
+    } else if (reverse) {
+        g_focus = current == hits.begin() ? hits.back() : *(current - 1);
+    } else {
+        ++current;
+        g_focus = current == hits.end() ? hits.front() : *current;
+    }
+    InvalidateHoverRect(window, old);
+    InvalidateHoverRect(window, g_focus);
+}
+
+void DrawFocusRing(Graphics& g, HWND window, const Theme& t)
+{
+    if (!g_keyboardFocusVisible) {
+        return;
+    }
+    EnsureKeyboardFocus(window);
+    const RECT rect = HoverRect(g_focus);
+    if (IsEmptyRect(rect)) {
+        return;
+    }
+    RECT ring = rect;
+    InflateRect(&ring, Px(3), Px(3));
+    Pen pen(t.accent, static_cast<REAL>(std::max(1, Px(1.5))));
+    pen.SetDashStyle(DashStyleDash);
+    GraphicsPath path;
+    AddRoundedRect(path, RectFOf(ring), static_cast<REAL>(Px(6)));
+    g.DrawPath(&pen, &path);
+}
+
 void InvalidateHoverRect(HWND window, Hit hit)
 {
     RECT rect = HoverRect(hit);
@@ -837,21 +1605,35 @@ bool EffectiveHandlerIsBackdropper(const wchar_t* extension)
         && _wcsicmp(value.c_str(), kBackdropperClsid) == 0;
 }
 
-bool IsBackdropperHandlerRegistered()
+RegistrationSummary ReadRegistrationSummary(const BackdropperSettings& settings)
 {
+    RegistrationSummary summary;
     std::wstring inproc;
-    if (!ReadStringValue(HKEY_CURRENT_USER, ClsidInprocPath(), nullptr, &inproc)
-        || _wcsicmp(inproc.c_str(), DllPath().c_str()) != 0) {
-        return false;
-    }
+    summary.currentDll = ReadStringValue(HKEY_CURRENT_USER, ClsidInprocPath(), nullptr, &inproc)
+        && _wcsicmp(inproc.c_str(), DllPath().c_str()) == 0;
 
-    const BackdropperSettings settings = LoadBackdropperSettings();
     for (size_t i = 0; i < kBackdropperFormats.size(); ++i) {
-        if (settings.enabledFormats[i] && EffectiveHandlerIsBackdropper(kBackdropperFormats[i])) {
-            return true;
+        if (!settings.enabledFormats[i] || !CanRegisterBackdropperFormat(kBackdropperFormats[i])) {
+            continue;
+        }
+        ++summary.expected;
+        if (EffectiveHandlerIsBackdropper(kBackdropperFormats[i])) {
+            ++summary.active;
         }
     }
-    return false;
+    return summary;
+}
+
+bool IsBackdropperHandlerRegistered()
+{
+    const RegistrationSummary summary = ReadRegistrationSummary(LoadBackdropperSettings());
+    return summary.currentDll && summary.active > 0;
+}
+
+void RefreshRegistrationState()
+{
+    g_state.registration = ReadRegistrationSummary(g_state.settings);
+    g_state.registered = g_state.registration.active > 0;
 }
 
 void OpenDialog(HWND window, const std::wstring& title, const std::wstring& body)
@@ -1792,16 +2574,32 @@ void DrawButton(Graphics& g, const RECT& rect, const std::wstring& text, const T
 
 std::wstring RegistrationText()
 {
-    return g_state.registered
-        ? L"Registered as the thumbnail handler"
-        : L"Not registered \u2014 using the default Windows handler";
+    const RegistrationSummary& r = g_state.registration;
+    if (!r.currentDll && r.active > 0) {
+        return L"Registered to a different Backdropper build";
+    }
+    if (r.expected == 0) {
+        return L"No available formats selected";
+    }
+    if (r.currentDll && r.active == r.expected) {
+        return L"Registered for all selected formats";
+    }
+    if (r.currentDll && r.active > 0) {
+        return L"Partially registered \u2014 " + std::to_wstring(r.active) + L" of " + std::to_wstring(r.expected) + L" formats active";
+    }
+    return L"Not registered \u2014 using default handlers";
 }
 
 Color RegistrationDot(const Theme& t)
 {
-    return g_state.registered
-        ? (EffectiveDark() ? Rgba(108, 203, 95) : Rgba(15, 123, 15))
-        : t.toggleOff;
+    const RegistrationSummary& r = g_state.registration;
+    if (r.currentDll && r.expected > 0 && r.active == r.expected) {
+        return EffectiveDark() ? Rgba(108, 203, 95) : Rgba(15, 123, 15);
+    }
+    if (r.active > 0) {
+        return Rgba(216, 145, 32);
+    }
+    return t.toggleOff;
 }
 
 size_t EnabledFormatCount()
@@ -2881,6 +3679,7 @@ void Paint(HWND window, HDC hdc)
     DrawAboutDialog(g, client, t);
     DrawPrivacyDialog(g, client, t);
     DrawFormatsDialog(g, client, t);
+    DrawFocusRing(g, window, t);
 
     BitBlt(hdc, 0, 0, client.right, client.bottom, mem, 0, 0, SRCCOPY);
     SelectObject(mem, old);
@@ -3040,30 +3839,45 @@ void SaveSettings(HWND window)
     }
 }
 
-void CheckForUpdates(HWND window)
+void ApplyUpdateCheckResult(HWND window, const UpdateCheckResult& result)
 {
-    SetCursor(LoadCursorW(nullptr, IDC_WAIT));
-    std::wstring latest;
-    const bool ok = FetchLatestVersion(&latest);
-    SetCursor(LoadCursorW(nullptr, IDC_ARROW));
-
-    if (!ok) {
+    g_state.updateCheckInProgress = false;
+    if (!result.ok) {
         g_state.updateAvailable = false;
         g_state.latestVersion.clear();
         g_state.updateStatus = L"Could not reach GitHub Releases";
     } else {
-        const int versionCompare = CompareVersions(latest, kBackdropperVersion);
-        g_state.latestVersion = latest;
+        const int versionCompare = CompareVersions(result.latest, kBackdropperVersion);
+        g_state.latestVersion = result.latest;
         g_state.updateAvailable = versionCompare > 0;
         if (versionCompare > 0) {
-            g_state.updateStatus = std::wstring(L"Version ") + latest + L" is available to download";
+            g_state.updateStatus = std::wstring(L"Version ") + result.latest + L" is available to download";
         } else if (versionCompare < 0) {
-            g_state.updateStatus = std::wstring(L"Running newer than latest release: ") + latest;
+            g_state.updateStatus = std::wstring(L"Running newer than latest release: ") + result.latest;
         } else {
             g_state.updateStatus = L"You're on the latest version";
         }
     }
     InvalidateRect(window, nullptr, TRUE);
+}
+
+void CheckForUpdates(HWND window)
+{
+    if (g_state.updateCheckInProgress) {
+        return;
+    }
+
+    g_state.updateCheckInProgress = true;
+    g_state.updateStatus = L"Checking GitHub Releases...";
+    InvalidateRect(window, nullptr, TRUE);
+
+    std::thread([window]() {
+        auto* result = new UpdateCheckResult();
+        result->ok = FetchLatestVersion(&result->latest);
+        if (!PostMessageW(window, WmUpdateCheckResult, 0, reinterpret_cast<LPARAM>(result))) {
+            delete result;
+        }
+    }).detach();
 }
 
 void StepSize(HWND window, int delta)
@@ -3238,7 +4052,8 @@ void ActivateHit(HWND window, Hit hit)
                 break;
             }
             const bool ok = RunRegsvr(window, false);
-            g_state.registered = IsBackdropperHandlerRegistered();
+            RefreshFormatAvailability();
+            RefreshRegistrationState();
             OpenDialog(window, ok ? L"Registered image handlers" : L"Registration failed",
                 ok ? L"Backdropper is now the per-user Shell thumbnail handler for the selected available formats."
                    : L"regsvr32 could not register BackdropperThumb.dll.");
@@ -3247,7 +4062,7 @@ void ActivateHit(HWND window, Hit hit)
     case Hit::Unregister:
         if (g_state.registered) {
             const bool ok = RunRegsvr(window, true);
-            g_state.registered = IsBackdropperHandlerRegistered();
+            RefreshRegistrationState();
             OpenDialog(window, ok ? L"Unregistered image handlers" : L"Unregister failed",
                 ok ? L"The handlers were removed, previous thumbnail handlers were restored, and the thumbnail cache was cleared."
                    : L"regsvr32 could not unregister BackdropperThumb.dll.");
@@ -3281,6 +4096,10 @@ HWND CreateEdit(HWND parent, int id)
 void LoadInitialState()
 {
     g_state.settings = LoadBackdropperSettings();
+    if (GetEnvironmentVariableW(L"BACKDROPPER_SCREENSHOT_LIGHT", nullptr, 0) > 0) {
+        g_state.matchSystemTheme = false;
+        g_state.dark = false;
+    }
     g_state.solidText = FormatColor(g_state.settings.solidColor);
     g_state.checkerAText = FormatColor(g_state.settings.checkerA);
     g_state.checkerBText = FormatColor(g_state.settings.checkerB);
@@ -3288,7 +4107,7 @@ void LoadInitialState()
     swprintf_s(size, L"%u", g_state.settings.checkerSize);
     g_state.sizeText = size;
     RefreshFormatAvailability();
-    g_state.registered = IsBackdropperHandlerRegistered();
+    RefreshRegistrationState();
 }
 
 LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam)
@@ -3303,6 +4122,9 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
         ApplyDpi(window, GetDpiForWindow(window));
         SyncEditsFromState();
         LayoutChildWindows(window);
+        if (g_state.settings.checkUpdatesAutomatically) {
+            PostMessageW(window, WmRunUpdateCheck, 0, 0);
+        }
         return 0;
 
     case WM_SIZE:
@@ -3382,7 +4204,12 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
             CloseAbout(window);
             return 0;
         }
-        ActivateHit(window, HitTest(pt));
+        const Hit hit = HitTest(pt);
+        if (hit != Hit::None) {
+            g_focus = hit;
+        }
+        g_keyboardFocusVisible = false;
+        ActivateHit(window, hit);
         return 0;
     }
 
@@ -3421,6 +4248,10 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
         break;
 
     case WM_KEYDOWN:
+        if (wparam == VK_TAB) {
+            MoveKeyboardFocus(window, (GetKeyState(VK_SHIFT) & 0x8000) != 0);
+            return 0;
+        }
         if (wparam == VK_ESCAPE) {
             if (PrivacyOpen()) {
                 ClosePrivacy(window);
@@ -3438,10 +4269,32 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
             CloseDialog(window);
             return 0;
         }
+        if ((wparam == VK_RETURN || wparam == VK_SPACE) && g_focus != Hit::None) {
+            ActivateHit(window, g_focus);
+            return 0;
+        }
         if (HandlePreviewKeyboardShortcut(window, wparam)) {
             return 0;
         }
         break;
+
+    case WmUpdateCheckResult: {
+        std::unique_ptr<UpdateCheckResult> result(reinterpret_cast<UpdateCheckResult*>(lparam));
+        if (result) {
+            ApplyUpdateCheckResult(window, *result);
+        }
+        return 0;
+    }
+
+    case WmRunUpdateCheck:
+        CheckForUpdates(window);
+        return 0;
+
+    case WmAccessibleInvoke:
+        g_focus = static_cast<Hit>(wparam);
+        g_keyboardFocusVisible = true;
+        ActivateHit(window, g_focus);
+        return 0;
 
     case WM_SETTINGCHANGE:
         if (g_state.matchSystemTheme) {
@@ -3465,6 +4318,21 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
         SetBkColor(hdc, SolidControlRef());
         return reinterpret_cast<LRESULT>(g_editBrush);
     }
+
+    case WM_GETOBJECT:
+        if (static_cast<LONG>(lparam) == UiaRootObjectId) {
+            auto* provider = new UiaProvider(window, Hit::None);
+            const LRESULT result = UiaReturnRawElementProvider(window, wparam, lparam, provider);
+            provider->Release();
+            return result;
+        }
+        if (static_cast<LONG>(lparam) == OBJID_CLIENT) {
+            auto* accessible = new AccessibleRoot(window);
+            const LRESULT result = LresultFromObject(IID_IAccessible, wparam, accessible);
+            accessible->Release();
+            return result;
+        }
+        break;
 
     case WM_DESTROY:
         if (g_editFont) {

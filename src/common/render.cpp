@@ -38,6 +38,8 @@ struct DecodedImage {
     std::vector<BYTE> premultipliedBgra;
 };
 
+bool LooksSvg(const std::vector<BYTE>& bytes);
+
 BYTE Blend(BYTE srcPremultiplied, BYTE bg, BYTE alpha)
 {
     return static_cast<BYTE>(srcPremultiplied + ((bg * (255 - alpha) + 127) / 255));
@@ -75,6 +77,16 @@ bool CheckedImageBytes(UINT width, UINT height, size_t* bytes)
     }
     *bytes = static_cast<size_t>(total);
     return true;
+}
+
+bool HasVisiblePixels(const DecodedImage& image)
+{
+    for (size_t i = 3; i < image.premultipliedBgra.size(); i += 4) {
+        if (image.premultipliedBgra[i] != 0) {
+            return true;
+        }
+    }
+    return false;
 }
 
 uint16_t ReadLe16(const BYTE* data)
@@ -125,6 +137,22 @@ HRESULT ReadStreamBytes(IStream* stream, std::vector<BYTE>* bytes)
         bytes->insert(bytes->end(), chunk, chunk + read);
     }
     return bytes->empty() ? E_FAIL : S_OK;
+}
+
+bool StreamLooksSvg(IStream* stream)
+{
+    LARGE_INTEGER zero = {};
+    stream->Seek(zero, STREAM_SEEK_SET, nullptr);
+
+    BYTE head[1024] = {};
+    ULONG read = 0;
+    const HRESULT hr = stream->Read(head, sizeof(head), &read);
+    stream->Seek(zero, STREAM_SEEK_SET, nullptr);
+    if (FAILED(hr) || read == 0) {
+        return false;
+    }
+
+    return LooksSvg(std::vector<BYTE>(head, head + read));
 }
 
 ComPtr<IStream> StreamFromBytes(const std::vector<BYTE>& bytes)
@@ -503,12 +531,21 @@ HRESULT DecodeSvg(const std::vector<BYTE>& bytes, UINT maxSize, DecodedImage* im
     }
 
     const UINT size = std::max(1u, maxSize);
-    return RenderD2D(size, size, [&](ID2D1DeviceContext5* context) -> HRESULT {
+    DecodedImage rendered;
+    const HRESULT hr = RenderD2D(size, size, [&](ID2D1DeviceContext5* context) -> HRESULT {
         ComPtr<ID2D1SvgDocument> document;
         RETURN_IF_FAILED(context->CreateSvgDocument(stream.Get(), D2D1::SizeF(static_cast<float>(size), static_cast<float>(size)), &document));
         context->DrawSvgDocument(document.Get());
         return S_OK;
-    }, image);
+    }, &rendered);
+    if (FAILED(hr)) {
+        return hr;
+    }
+    if (!HasVisiblePixels(rendered)) {
+        return E_FAIL;
+    }
+    *image = rendered;
+    return S_OK;
 }
 
 bool ReplaceAll(std::string* text, const char* from, const char* to)
@@ -766,6 +803,50 @@ HRESULT DecodeFallbackImage(IWICImagingFactory* factory, IStream* stream, UINT m
     return DecodePostScriptWithGhostscript(factory, bytes, maxSize, image);
 }
 
+bool WicSourceHasVisiblePixels(IWICImagingFactory* factory, IWICBitmapSource* source, UINT sourceWidth, UINT sourceHeight, UINT maxSize)
+{
+    if (sourceWidth == 0 || sourceHeight == 0) {
+        return false;
+    }
+
+    const double scale = std::min(1.0, static_cast<double>(maxSize) / static_cast<double>(std::max(sourceWidth, sourceHeight)));
+    const UINT width = std::max(1u, static_cast<UINT>(sourceWidth * scale));
+    const UINT height = std::max(1u, static_cast<UINT>(sourceHeight * scale));
+
+    ComPtr<IWICBitmapSource> scaledSource = source;
+    ComPtr<IWICBitmapScaler> scaler;
+    if (width != sourceWidth || height != sourceHeight) {
+        if (FAILED(factory->CreateBitmapScaler(&scaler))) {
+            return false;
+        }
+        if (FAILED(scaler->Initialize(source, width, height, WICBitmapInterpolationModeFant))) {
+            return false;
+        }
+        scaledSource = scaler;
+    }
+
+    ComPtr<IWICFormatConverter> converter;
+    if (FAILED(factory->CreateFormatConverter(&converter))) {
+        return false;
+    }
+    if (FAILED(converter->Initialize(scaledSource.Get(), GUID_WICPixelFormat32bppPBGRA,
+            WICBitmapDitherTypeNone, nullptr, 0.0, WICBitmapPaletteTypeCustom))) {
+        return false;
+    }
+
+    const UINT stride = width * 4;
+    std::vector<BYTE> pixels(stride * height);
+    if (FAILED(converter->CopyPixels(nullptr, stride, static_cast<UINT>(pixels.size()), pixels.data()))) {
+        return false;
+    }
+    for (size_t i = 3; i < pixels.size(); i += 4) {
+        if (pixels[i] != 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 HRESULT RenderWicSource(IWICImagingFactory* factory, IWICBitmapSource* source, UINT sourceWidth, UINT sourceHeight,
     UINT maxSize, const BackdropperSettings& settings, HBITMAP* bitmap, WTS_ALPHATYPE* alphaType)
 {
@@ -860,6 +941,7 @@ HRESULT RenderBackdropperThumbnail(IStream* stream, UINT maxSize, const Backdrop
 
     LARGE_INTEGER zero = {};
     stream->Seek(zero, STREAM_SEEK_SET, nullptr);
+    const bool inputLooksSvg = StreamLooksSvg(stream);
 
     ComPtr<IWICImagingFactory> factory;
     HRESULT hr = CreateWicFactory(&factory);
@@ -882,9 +964,12 @@ HRESULT RenderBackdropperThumbnail(IStream* stream, UINT maxSize, const Backdrop
         if (sourceWidth == 0 || sourceHeight == 0) {
             return E_FAIL;
         }
-        return RenderWicSource(factory.Get(), frame.Get(), sourceWidth, sourceHeight, maxSize, settings, bitmap, alphaType);
+        if (!inputLooksSvg || WicSourceHasVisiblePixels(factory.Get(), frame.Get(), sourceWidth, sourceHeight, maxSize)) {
+            return RenderWicSource(factory.Get(), frame.Get(), sourceWidth, sourceHeight, maxSize, settings, bitmap, alphaType);
+        }
     }
 
+    stream->Seek(zero, STREAM_SEEK_SET, nullptr);
     DecodedImage decoded;
     RETURN_IF_FAILED(DecodeFallbackImage(factory.Get(), stream, maxSize, &decoded));
     ComPtr<IWICBitmap> fallbackSource;

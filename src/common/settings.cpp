@@ -26,15 +26,17 @@ DWORD ReadDword(HKEY key, const wchar_t* name, DWORD fallback)
     return value;
 }
 
-void WriteString(HKEY key, const wchar_t* name, const std::wstring& value)
+HRESULT WriteString(HKEY key, const wchar_t* name, const std::wstring& value)
 {
-    RegSetValueExW(key, name, 0, REG_SZ, reinterpret_cast<const BYTE*>(value.c_str()),
+    const LSTATUS status = RegSetValueExW(key, name, 0, REG_SZ, reinterpret_cast<const BYTE*>(value.c_str()),
         static_cast<DWORD>((value.size() + 1) * sizeof(wchar_t)));
+    return HRESULT_FROM_WIN32(status);
 }
 
-void WriteDword(HKEY key, const wchar_t* name, DWORD value)
+HRESULT WriteDword(HKEY key, const wchar_t* name, DWORD value)
 {
-    RegSetValueExW(key, name, 0, REG_DWORD, reinterpret_cast<const BYTE*>(&value), sizeof(value));
+    const LSTATUS status = RegSetValueExW(key, name, 0, REG_DWORD, reinterpret_cast<const BYTE*>(&value), sizeof(value));
+    return HRESULT_FROM_WIN32(status);
 }
 
 std::wstring FormatEnabledName(const wchar_t* extension)
@@ -83,7 +85,7 @@ BackdropperSettings LoadBackdropperSettings()
     ParseColor(ReadString(key, L"CheckerColorA", L"#FFFFFF").c_str(), &settings.checkerA);
     ParseColor(ReadString(key, L"CheckerColorB", L"#C8C8C8").c_str(), &settings.checkerB);
     settings.checkerSize = std::max(1u, std::min(64u, static_cast<UINT>(ReadDword(key, L"CheckerSize", 8))));
-    settings.deleteThumbnailDbsOnSave = ReadDword(key, L"DeleteThumbnailDbsOnSave", 1) != 0;
+    settings.deleteThumbnailDbsOnSave = ReadDword(key, L"DeleteThumbnailDbsOnSave", 0) != 0;
     settings.checkUpdatesAutomatically = ReadDword(key, L"CheckUpdatesAutomatically", 1) != 0;
     for (size_t i = 0; i < kBackdropperFormats.size(); ++i) {
         const std::wstring name = FormatEnabledName(kBackdropperFormats[i]);
@@ -102,19 +104,21 @@ HRESULT SaveBackdropperSettings(const BackdropperSettings& settings)
         return HRESULT_FROM_WIN32(status);
     }
 
-    WriteString(key, L"Mode", FormatMode(settings.mode));
-    WriteString(key, L"SolidColor", FormatColor(settings.solidColor));
-    WriteString(key, L"CheckerColorA", FormatColor(settings.checkerA));
-    WriteString(key, L"CheckerColorB", FormatColor(settings.checkerB));
-    WriteDword(key, L"CheckerSize", std::max(1u, std::min(64u, settings.checkerSize)));
-    WriteDword(key, L"DeleteThumbnailDbsOnSave", settings.deleteThumbnailDbsOnSave ? 1 : 0);
-    WriteDword(key, L"CheckUpdatesAutomatically", settings.checkUpdatesAutomatically ? 1 : 0);
+    HRESULT hr = WriteString(key, L"Mode", FormatMode(settings.mode));
+    if (SUCCEEDED(hr)) hr = WriteString(key, L"SolidColor", FormatColor(settings.solidColor));
+    if (SUCCEEDED(hr)) hr = WriteString(key, L"CheckerColorA", FormatColor(settings.checkerA));
+    if (SUCCEEDED(hr)) hr = WriteString(key, L"CheckerColorB", FormatColor(settings.checkerB));
+    if (SUCCEEDED(hr)) hr = WriteDword(key, L"CheckerSize", std::max(1u, std::min(64u, settings.checkerSize)));
+    if (SUCCEEDED(hr)) hr = WriteDword(key, L"DeleteThumbnailDbsOnSave", settings.deleteThumbnailDbsOnSave ? 1 : 0);
+    if (SUCCEEDED(hr)) hr = WriteDword(key, L"CheckUpdatesAutomatically", settings.checkUpdatesAutomatically ? 1 : 0);
     for (size_t i = 0; i < kBackdropperFormats.size(); ++i) {
         const std::wstring name = FormatEnabledName(kBackdropperFormats[i]);
-        WriteDword(key, name.c_str(), settings.enabledFormats[i] ? 1 : 0);
+        if (SUCCEEDED(hr)) {
+            hr = WriteDword(key, name.c_str(), settings.enabledFormats[i] ? 1 : 0);
+        }
     }
     RegCloseKey(key);
-    return S_OK;
+    return hr;
 }
 
 std::wstring FormatColor(COLORREF color)

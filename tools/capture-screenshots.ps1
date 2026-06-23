@@ -18,6 +18,7 @@ using System;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
+using System.IO;
 using System.Runtime.InteropServices;
 
 public static class ScreenshotWin32
@@ -38,6 +39,7 @@ public static class ScreenshotWin32
     [DllImport("user32.dll")] static extern int GetWindowTextLength(IntPtr hWnd);
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
     [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr hWnd);
+    [DllImport("user32.dll")] static extern bool SetCursorPos(int x, int y);
     [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
     [DllImport("user32.dll")] static extern bool PrintWindow(IntPtr hWnd, IntPtr hdcBlt, uint nFlags);
     [DllImport("user32.dll")] static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
@@ -77,6 +79,14 @@ public static class ScreenshotWin32
         SendMessage(hWnd, WM_LBUTTONUP, IntPtr.Zero, lParam);
     }
 
+    public static void ParkCursor(IntPtr hWnd)
+    {
+        RECT rect;
+        if (GetWindowRect(hWnd, out rect)) {
+            SetCursorPos(rect.Left + 18, rect.Top + 18);
+        }
+    }
+
     public static void SaveWindowPng(IntPtr hWnd, string path)
     {
         RECT rect;
@@ -108,7 +118,7 @@ public static class ScreenshotWin32
                 int targetWidth = dpi > 0 ? Math.Max(1, (int)Math.Round(width * 96.0 / dpi)) : width;
                 int targetHeight = dpi > 0 ? Math.Max(1, (int)Math.Round(height * 96.0 / dpi)) : height;
                 if (targetWidth == width && targetHeight == height) {
-                    output.Save(path, ImageFormat.Png);
+                    SaveIfChanged(output, path);
                 } else {
                     using (var resized = new Bitmap(targetWidth, targetHeight, PixelFormat.Format32bppArgb))
                     using (var resizedGraphics = Graphics.FromImage(resized)) {
@@ -116,11 +126,78 @@ public static class ScreenshotWin32
                         resizedGraphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
                         resizedGraphics.SmoothingMode = SmoothingMode.AntiAlias;
                         resizedGraphics.DrawImage(output, 0, 0, targetWidth, targetHeight);
-                        resized.Save(path, ImageFormat.Png);
+                        SaveIfChanged(resized, path);
                     }
                 }
             }
         }
+    }
+
+    static void SaveIfChanged(Bitmap image, string path)
+    {
+        if (File.Exists(path)) {
+            using (var existing = new Bitmap(path)) {
+                if (SamePixels(image, existing)) {
+                    return;
+                }
+            }
+        }
+
+        string directory = Path.GetDirectoryName(path);
+        if (!String.IsNullOrEmpty(directory)) {
+            Directory.CreateDirectory(directory);
+        }
+
+        string tempPath = path + "." + Guid.NewGuid().ToString("N") + ".tmp.png";
+        image.Save(tempPath, ImageFormat.Png);
+        if (File.Exists(path)) {
+            File.Delete(path);
+        }
+        File.Move(tempPath, path);
+    }
+
+    static bool SamePixels(Bitmap left, Bitmap right)
+    {
+        if (left.Width != right.Width || left.Height != right.Height) {
+            return false;
+        }
+
+        using (var leftArgb = CopyArgb(left))
+        using (var rightArgb = CopyArgb(right)) {
+            Rectangle rect = new Rectangle(0, 0, left.Width, left.Height);
+            BitmapData leftData = leftArgb.LockBits(rect, ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+            BitmapData rightData = rightArgb.LockBits(rect, ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+            try {
+                int rowBytes = left.Width * 4;
+                byte[] leftRow = new byte[rowBytes];
+                byte[] rightRow = new byte[rowBytes];
+                for (int y = 0; y < left.Height; ++y) {
+                    IntPtr leftPtr = new IntPtr(leftData.Scan0.ToInt64() + y * leftData.Stride);
+                    IntPtr rightPtr = new IntPtr(rightData.Scan0.ToInt64() + y * rightData.Stride);
+                    Marshal.Copy(leftPtr, leftRow, 0, rowBytes);
+                    Marshal.Copy(rightPtr, rightRow, 0, rowBytes);
+                    for (int i = 0; i < rowBytes; ++i) {
+                        if (leftRow[i] != rightRow[i]) {
+                            return false;
+                        }
+                    }
+                }
+                return true;
+            } finally {
+                leftArgb.UnlockBits(leftData);
+                rightArgb.UnlockBits(rightData);
+            }
+        }
+    }
+
+    static Bitmap CopyArgb(Bitmap source)
+    {
+        var copy = new Bitmap(source.Width, source.Height, PixelFormat.Format32bppArgb);
+        using (var graphics = Graphics.FromImage(copy)) {
+            graphics.Clear(Color.Transparent);
+            graphics.DrawImageUnscaled(source, 0, 0);
+        }
+        return copy;
     }
 
     static GraphicsPath RoundedWindowPath(int width, int height)
@@ -175,8 +252,8 @@ function Set-DemoSettings {
     New-ItemProperty -LiteralPath $path -Name CheckerColorA -PropertyType String -Value "#FFFFFF" -Force | Out-Null
     New-ItemProperty -LiteralPath $path -Name CheckerColorB -PropertyType String -Value "#E5E7EB" -Force | Out-Null
     New-ItemProperty -LiteralPath $path -Name CheckerSize -PropertyType DWord -Value 16 -Force | Out-Null
-    New-ItemProperty -LiteralPath $path -Name DeleteThumbnailDbsOnSave -PropertyType DWord -Value 1 -Force | Out-Null
-    New-ItemProperty -LiteralPath $path -Name CheckUpdatesAutomatically -PropertyType DWord -Value 1 -Force | Out-Null
+    New-ItemProperty -LiteralPath $path -Name DeleteThumbnailDbsOnSave -PropertyType DWord -Value 0 -Force | Out-Null
+    New-ItemProperty -LiteralPath $path -Name CheckUpdatesAutomatically -PropertyType DWord -Value 0 -Force | Out-Null
 
     return $snapshot
 }
@@ -203,12 +280,16 @@ function Restore-Settings($snapshot) {
 
 $settingsSnapshot = Set-DemoSettings
 $app = $null
+$previousScreenshotTheme = $env:BACKDROPPER_SCREENSHOT_LIGHT
 try {
+    $env:BACKDROPPER_SCREENSHOT_LIGHT = "1"
     $app = Start-Process -FilePath $ExePath -PassThru
     $hwnd = Wait-BackdropperWindow $app
     [ScreenshotWin32]::Activate($hwnd)
     Start-Sleep -Milliseconds 900
 
+    [ScreenshotWin32]::ParkCursor($hwnd)
+    Start-Sleep -Milliseconds 100
     [ScreenshotWin32]::SaveWindowPng($hwnd, (Join-Path $OutDir "settings-main.png"))
 
     $rect = [ScreenshotWin32+RECT]::new()
@@ -220,6 +301,8 @@ try {
     [ScreenshotWin32]::ClientClick($hwnd, [int]($width * 397 / 1060), [int]($height * 406 / 692))
     Start-Sleep -Milliseconds 300
 
+    [ScreenshotWin32]::ParkCursor($hwnd)
+    Start-Sleep -Milliseconds 100
     [ScreenshotWin32]::SaveWindowPng($hwnd, (Join-Path $OutDir "settings-supported-formats.png"))
 
     [ScreenshotWin32]::ClientClick($hwnd, [int]($width * 744 / 1060), [int]($height * 550 / 692))
@@ -229,6 +312,8 @@ try {
     [ScreenshotWin32]::ClientClick($hwnd, [int]($width * 959 / 1060), [int]($height * 118 / 692))
     Start-Sleep -Milliseconds 300
 
+    [ScreenshotWin32]::ParkCursor($hwnd)
+    Start-Sleep -Milliseconds 100
     [ScreenshotWin32]::SaveWindowPng($hwnd, (Join-Path $OutDir "settings-view-menu.png"))
 
     [ScreenshotWin32]::ClientClick($hwnd, [int]($width * 959 / 1060), [int]($height * 118 / 692))
@@ -237,11 +322,15 @@ try {
     [ScreenshotWin32]::ClientClick($hwnd, [int]($width * 800 / 1060), [int]($height * 20 / 692))
     Start-Sleep -Milliseconds 300
 
+    [ScreenshotWin32]::ParkCursor($hwnd)
+    Start-Sleep -Milliseconds 100
     [ScreenshotWin32]::SaveWindowPng($hwnd, (Join-Path $OutDir "settings-about.png"))
 
     [ScreenshotWin32]::ClientClick($hwnd, [int]($width * 617 / 1060), [int]($height * 499 / 692))
     Start-Sleep -Milliseconds 300
 
+    [ScreenshotWin32]::ParkCursor($hwnd)
+    Start-Sleep -Milliseconds 100
     [ScreenshotWin32]::SaveWindowPng($hwnd, (Join-Path $OutDir "settings-privacy.png"))
 } finally {
     if ($app -and -not $app.HasExited) {
@@ -250,4 +339,9 @@ try {
         if (-not $app.HasExited) { $app.Kill() }
     }
     Restore-Settings $settingsSnapshot
+    if ($null -eq $previousScreenshotTheme) {
+        Remove-Item Env:\BACKDROPPER_SCREENSHOT_LIGHT -ErrorAction SilentlyContinue
+    } else {
+        $env:BACKDROPPER_SCREENSHOT_LIGHT = $previousScreenshotTheme
+    }
 }

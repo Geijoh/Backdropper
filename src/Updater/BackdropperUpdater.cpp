@@ -2,12 +2,16 @@
 #include "version.h"
 
 #include <windows.h>
+#include <softpub.h>
 #include <shellapi.h>
 #include <urlmon.h>
+#include <wincrypt.h>
+#include <wintrust.h>
 
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -17,6 +21,17 @@ namespace {
 
 constexpr wchar_t kVersionUrl[] = L"https://github.com/Geijoh/Backdropper/releases/latest/download/backdropper-version.txt";
 constexpr wchar_t kLatestDownloadBaseUrl[] = L"https://github.com/Geijoh/Backdropper/releases/latest/download/";
+constexpr wchar_t kExpectedSigner[] = L"Christopher Johnson";
+
+const std::vector<std::wstring>& RequiredPayloadFiles()
+{
+    static const std::vector<std::wstring> files {
+        L"BackdropperSettings.exe",
+        L"BackdropperThumb.dll",
+        L"BackdropperUpdater.exe",
+    };
+    return files;
+}
 
 std::wstring Quote(const std::wstring& value)
 {
@@ -101,6 +116,115 @@ void CopyPayload(const fs::path& payloadDir, const fs::path& installDir)
     }
 }
 
+bool VerifyAuthenticodeSignature(const fs::path& file)
+{
+    WINTRUST_FILE_INFO fileInfo {};
+    fileInfo.cbStruct = sizeof(fileInfo);
+    const std::wstring path = file.wstring();
+    fileInfo.pcwszFilePath = path.c_str();
+
+    GUID policy = WINTRUST_ACTION_GENERIC_VERIFY_V2;
+    WINTRUST_DATA data {};
+    data.cbStruct = sizeof(data);
+    data.dwUIChoice = WTD_UI_NONE;
+    data.fdwRevocationChecks = WTD_REVOKE_WHOLECHAIN;
+    data.dwUnionChoice = WTD_CHOICE_FILE;
+    data.pFile = &fileInfo;
+    data.dwStateAction = WTD_STATEACTION_VERIFY;
+    data.dwProvFlags = WTD_REVOCATION_CHECK_CHAIN;
+
+    const LONG status = WinVerifyTrust(nullptr, &policy, &data);
+    data.dwStateAction = WTD_STATEACTION_CLOSE;
+    WinVerifyTrust(nullptr, &policy, &data);
+    return status == ERROR_SUCCESS;
+}
+
+bool SignerMatches(const fs::path& file)
+{
+    HCERTSTORE store = nullptr;
+    HCRYPTMSG message = nullptr;
+    DWORD encoding = 0;
+    DWORD contentType = 0;
+    DWORD formatType = 0;
+    const std::wstring path = file.wstring();
+    if (!CryptQueryObject(CERT_QUERY_OBJECT_FILE, path.c_str(),
+            CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED_EMBED, CERT_QUERY_FORMAT_FLAG_BINARY,
+            0, &encoding, &contentType, &formatType, &store, &message, nullptr)) {
+        return false;
+    }
+
+    DWORD signerInfoSize = 0;
+    bool ok = CryptMsgGetParam(message, CMSG_SIGNER_INFO_PARAM, 0, nullptr, &signerInfoSize) != FALSE;
+    std::vector<BYTE> signerInfoBuffer(signerInfoSize);
+    ok = ok && CryptMsgGetParam(message, CMSG_SIGNER_INFO_PARAM, 0, signerInfoBuffer.data(), &signerInfoSize) != FALSE;
+    if (ok) {
+        auto* signerInfo = reinterpret_cast<PCMSG_SIGNER_INFO>(signerInfoBuffer.data());
+        CERT_INFO certInfo {};
+        certInfo.Issuer = signerInfo->Issuer;
+        certInfo.SerialNumber = signerInfo->SerialNumber;
+        PCCERT_CONTEXT cert = CertFindCertificateInStore(store, encoding, 0, CERT_FIND_SUBJECT_CERT, &certInfo, nullptr);
+        if (cert) {
+            wchar_t subject[256] = {};
+            CertGetNameStringW(cert, CERT_NAME_SIMPLE_DISPLAY_TYPE, 0, nullptr, subject, ARRAYSIZE(subject));
+            ok = wcsstr(subject, kExpectedSigner) != nullptr;
+            CertFreeCertificateContext(cert);
+        } else {
+            ok = false;
+        }
+    }
+
+    if (message) {
+        CryptMsgClose(message);
+    }
+    if (store) {
+        CertCloseStore(store, 0);
+    }
+    return ok;
+}
+
+void VerifyPayload(const fs::path& payloadDir)
+{
+    for (const std::wstring& name : RequiredPayloadFiles()) {
+        const fs::path file = payloadDir / name;
+        if (!fs::exists(file)) {
+            throw std::runtime_error("The downloaded ZIP is missing a required Backdropper binary.");
+        }
+        if (!VerifyAuthenticodeSignature(file) || !SignerMatches(file)) {
+            throw std::runtime_error("The downloaded Backdropper binaries are not signed by the expected publisher.");
+        }
+    }
+}
+
+void RestoreBackup(const fs::path& backupDir, const fs::path& installDir)
+{
+    if (!fs::exists(backupDir)) {
+        return;
+    }
+    CopyPayload(backupDir, installDir);
+}
+
+void InstallPayloadWithBackup(const fs::path& payloadDir, const fs::path& installDir, const fs::path& backupDir)
+{
+    std::error_code ignored;
+    fs::remove_all(backupDir, ignored);
+    fs::create_directories(backupDir);
+
+    for (const auto& entry : fs::directory_iterator(payloadDir)) {
+        const fs::path target = installDir / entry.path().filename();
+        if (fs::exists(target)) {
+            fs::copy(target, backupDir / target.filename(),
+                fs::copy_options::recursive | fs::copy_options::overwrite_existing);
+        }
+    }
+
+    try {
+        CopyPayload(payloadDir, installDir);
+    } catch (...) {
+        RestoreBackup(backupDir, installDir);
+        throw;
+    }
+}
+
 void CheckWritable(const fs::path& installDir)
 {
     const fs::path probe = installDir / L".backdropper-update-write-test";
@@ -150,7 +274,7 @@ int SelfTest()
     fs::create_directories(copyRoot / L"payload" / L"nested");
     std::ofstream(copyRoot / L"payload" / L"file.txt") << "ok";
     std::ofstream(copyRoot / L"payload" / L"nested" / L"file.txt") << "ok";
-    CopyPayload(copyRoot / L"payload", copyRoot / L"install");
+    InstallPayloadWithBackup(copyRoot / L"payload", copyRoot / L"install", copyRoot / L"backup");
     const bool copied = fs::exists(copyRoot / L"install" / L"file.txt")
         && fs::exists(copyRoot / L"install" / L"nested" / L"file.txt");
     fs::remove_all(copyRoot);
@@ -215,6 +339,7 @@ int wmain()
         fs::create_directories(tempRoot);
         const fs::path versionFile = tempRoot / L"backdropper-version.txt";
         const fs::path extractDir = tempRoot / L"extract";
+        const fs::path backupDir = tempRoot / L"backup";
 
         WriteStep(L"Checking latest GitHub release...");
         if (!Download(std::wstring(kVersionUrl) + L"?t=" + std::to_wstring(GetTickCount64()), versionFile)) {
@@ -246,18 +371,20 @@ int wmain()
             throw std::runtime_error("The downloaded ZIP does not contain BackdropperSettings.exe.");
         }
         const fs::path payloadDir = settingsExe.parent_path();
+        WriteStep(L"Verifying publisher signatures...");
+        VerifyPayload(payloadDir);
 
         WriteStep(L"Waiting for Backdropper to close...");
         WaitForProcess(args.currentPid);
 
         WriteStep(L"Replacing Backdropper files...");
         try {
-            CopyPayload(payloadDir, installDir);
+            InstallPayloadWithBackup(payloadDir, installDir, backupDir);
         } catch (...) {
             WriteStep(L"Files are still in use. Restarting Explorer and retrying...");
             stoppedExplorer = StopBackdropperExplorerShell();
             Sleep(2000);
-            CopyPayload(payloadDir, installDir);
+            InstallPayloadWithBackup(payloadDir, installDir, backupDir);
         }
 
         if (stoppedExplorer) {

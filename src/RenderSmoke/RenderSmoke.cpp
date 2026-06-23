@@ -140,6 +140,13 @@ HRESULT CreateSvgSymbolStream(IStream** stream)
     return CreateMemoryStream(reinterpret_cast<const BYTE*>(svg), sizeof(svg) - 1, stream);
 }
 
+HRESULT CreateBlankSvgStream(IStream** stream)
+{
+    static constexpr char svg[] =
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"2\" height=\"2\" viewBox=\"0 0 2 2\"></svg>";
+    return CreateMemoryStream(reinterpret_cast<const BYTE*>(svg), sizeof(svg) - 1, stream);
+}
+
 HRESULT CreatePdfStream(IStream** stream)
 {
     std::string pdf = "%PDF-1.4\n";
@@ -301,6 +308,21 @@ int main()
     }
     const bool svgSymbolContentRendered = ContainsRedPixel(svgSymbol.Get(), settings);
 
+    ComPtr<IStream> blankSvg;
+    hr = CreateBlankSvgStream(&blankSvg);
+    if (FAILED(hr)) {
+        CoUninitialize();
+        return Fail("CreateBlankSvgStream", hr);
+    }
+    HBITMAP blankBitmap = nullptr;
+    WTS_ALPHATYPE blankAlpha = WTSAT_UNKNOWN;
+    hr = RenderBackdropperThumbnail(blankSvg.Get(), 32, settings, &blankBitmap, &blankAlpha);
+    if (SUCCEEDED(hr)) {
+        DeleteObject(blankBitmap);
+        CoUninitialize();
+        return Fail("blank SVG unexpectedly rendered");
+    }
+
     ComPtr<IStream> pdf;
     hr = CreatePdfStream(&pdf);
     if (FAILED(hr)) {
@@ -336,6 +358,6 @@ int main()
         return Fail("PDF did not render");
     }
 
-    std::puts("OK: PNG/TGA/PSD/SVG transparency composited, SVG content rendered, PDF rendered, corrupt input rejected.");
+    std::puts("OK: PNG/TGA/PSD/SVG transparency composited, SVG content rendered, blank SVG rejected, PDF rendered, corrupt input rejected.");
     return 0;
 }

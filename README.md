@@ -16,7 +16,7 @@ Release builds are code-signed with Azure Artifact Signing.
 
 Use **Supported formats** in the app to choose which extensions Backdropper registers. EPS and legacy PostScript-style AI require [Ghostscript](https://ghostscript.com/releases/gsdnld.html); EPS is disabled automatically when Ghostscript is not installed.
 
-Use **Check for updates** in the app to check GitHub Releases. When a newer build is available, Backdropper can download the latest Windows x64 build, replace the current files, and relaunch. The install folder must be writable by the current user.
+Use **Check for updates** in the app to check GitHub Releases. When a newer build is available, Backdropper can download the latest Windows x64 build, verify the signed binaries, replace the current files, and relaunch. The install folder must be writable by the current user.
 
 ## System Requirements
 
@@ -105,7 +105,7 @@ SVG and PDF render through native Windows APIs. PDF-compatible AI uses the same 
 
 ## Update Script
 
-Release ZIPs include `BackdropperUpdater.exe`. The app uses this helper for update actions. It reads the latest release version, downloads the matching version-numbered Windows x64 ZIP, waits for the settings app to close, replaces files in-place, and starts Backdropper again. If Explorer has the handler DLL locked, the updater restarts Explorer and retries the replacement.
+Release ZIPs include `BackdropperUpdater.exe`. The app uses this helper for update actions. It reads the latest release version, downloads the matching version-numbered Windows x64 ZIP, verifies that the shipping binaries are signed by the expected publisher, waits for the settings app to close, replaces files in-place, and starts Backdropper again. If Explorer has the handler DLL locked, the updater restarts Explorer and retries the replacement.
 
 ## Development Note
 
