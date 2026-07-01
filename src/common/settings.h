@@ -25,6 +25,7 @@ struct BackdropperSettings {
     COLORREF checkerA = RGB(255, 255, 255);
     COLORREF checkerB = RGB(200, 200, 200);
     UINT checkerSize = 8;
+    bool protectAppIcons = true;
     bool deleteThumbnailDbsOnSave = false;
     bool checkUpdatesAutomatically = true;
     std::array<bool, kBackdropperFormatCount> enabledFormats = {

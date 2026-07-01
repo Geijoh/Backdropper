@@ -229,7 +229,7 @@ function Wait-BackdropperWindow($process) {
 
 function Set-DemoSettings {
     $path = "HKCU:\Software\Backdropper"
-    $names = @("Mode", "SolidColor", "CheckerColorA", "CheckerColorB", "CheckerSize", "DeleteThumbnailDbsOnSave", "CheckUpdatesAutomatically")
+    $names = @("Mode", "SolidColor", "CheckerColorA", "CheckerColorB", "CheckerSize", "ProtectAppIcons", "DeleteThumbnailDbsOnSave", "CheckUpdatesAutomatically")
     $snapshot = @{
         existed = Test-Path -LiteralPath $path
         values = @{}
@@ -252,6 +252,7 @@ function Set-DemoSettings {
     New-ItemProperty -LiteralPath $path -Name CheckerColorA -PropertyType String -Value "#FFFFFF" -Force | Out-Null
     New-ItemProperty -LiteralPath $path -Name CheckerColorB -PropertyType String -Value "#E5E7EB" -Force | Out-Null
     New-ItemProperty -LiteralPath $path -Name CheckerSize -PropertyType DWord -Value 16 -Force | Out-Null
+    New-ItemProperty -LiteralPath $path -Name ProtectAppIcons -PropertyType DWord -Value 1 -Force | Out-Null
     New-ItemProperty -LiteralPath $path -Name DeleteThumbnailDbsOnSave -PropertyType DWord -Value 0 -Force | Out-Null
     New-ItemProperty -LiteralPath $path -Name CheckUpdatesAutomatically -PropertyType DWord -Value 0 -Force | Out-Null
 
@@ -266,7 +267,7 @@ function Restore-Settings($snapshot) {
     }
 
     New-Item -Path $path -Force | Out-Null
-    foreach ($name in @("Mode", "SolidColor", "CheckerColorA", "CheckerColorB", "CheckerSize", "DeleteThumbnailDbsOnSave", "CheckUpdatesAutomatically")) {
+    foreach ($name in @("Mode", "SolidColor", "CheckerColorA", "CheckerColorB", "CheckerSize", "ProtectAppIcons", "DeleteThumbnailDbsOnSave", "CheckUpdatesAutomatically")) {
         $value = $snapshot.values[$name]
         if ($null -eq $value) {
             Remove-ItemProperty -LiteralPath $path -Name $name -ErrorAction SilentlyContinue
@@ -305,7 +306,7 @@ try {
     Start-Sleep -Milliseconds 100
     [ScreenshotWin32]::SaveWindowPng($hwnd, (Join-Path $OutDir "settings-supported-formats.png"))
 
-    [ScreenshotWin32]::ClientClick($hwnd, [int]($width * 744 / 1060), [int]($height * 550 / 692))
+    [ScreenshotWin32]::ClientClick($hwnd, [int]($width * 744 / 1060), [int]($height * 586 / 692))
     Start-Sleep -Milliseconds 200
 
     # Natural layout is 1060x692 DIPs; ratio keeps this DPI-independent.

@@ -121,6 +121,93 @@ HRESULT CreatePsdStream(IStream** stream)
     return CreateMemoryStream(data, sizeof(data), stream);
 }
 
+struct IcoFrameSpec {
+    UINT size = 0;
+    BYTE bgra[4] = {};
+    std::vector<BYTE> pixels;
+};
+
+void AppendBytes(std::vector<BYTE>* data, const void* bytes, size_t count)
+{
+    const BYTE* src = static_cast<const BYTE*>(bytes);
+    data->insert(data->end(), src, src + count);
+}
+
+// Classic BMP-in-ICO: ICONDIR + one ICONDIRENTRY per frame, each frame a
+// BITMAPINFOHEADER with doubled height followed by bottom-up 32bpp XOR pixels
+// (frame.pixels if provided, else a solid frame.bgra fill) and a zeroed 1bpp
+// AND mask padded to 32-bit rows.
+HRESULT CreateIcoStream(const std::vector<IcoFrameSpec>& frames, IStream** stream)
+{
+    std::vector<BYTE> data;
+    const WORD header[] = { 0, 1, static_cast<WORD>(frames.size()) };
+    AppendBytes(&data, header, sizeof(header));
+
+    DWORD offset = 6 + 16 * static_cast<DWORD>(frames.size());
+    for (const IcoFrameSpec& frame : frames) {
+        const DWORD andStride = ((frame.size + 31) / 32) * 4;
+        const DWORD bytesInRes = 40 + frame.size * frame.size * 4 + andStride * frame.size;
+
+        const BYTE entry[] = {
+            static_cast<BYTE>(frame.size < 256 ? frame.size : 0),
+            static_cast<BYTE>(frame.size < 256 ? frame.size : 0),
+            0, 0, 1, 0, 32, 0,
+            static_cast<BYTE>(bytesInRes), static_cast<BYTE>(bytesInRes >> 8),
+            static_cast<BYTE>(bytesInRes >> 16), static_cast<BYTE>(bytesInRes >> 24),
+            static_cast<BYTE>(offset), static_cast<BYTE>(offset >> 8),
+            static_cast<BYTE>(offset >> 16), static_cast<BYTE>(offset >> 24),
+        };
+        AppendBytes(&data, entry, sizeof(entry));
+        offset += bytesInRes;
+    }
+
+    for (const IcoFrameSpec& frame : frames) {
+        BITMAPINFOHEADER info = {};
+        info.biSize = sizeof(info);
+        info.biWidth = static_cast<LONG>(frame.size);
+        info.biHeight = static_cast<LONG>(frame.size * 2);
+        info.biPlanes = 1;
+        info.biBitCount = 32;
+        AppendBytes(&data, &info, sizeof(info));
+
+        if (!frame.pixels.empty()) {
+            AppendBytes(&data, frame.pixels.data(), frame.pixels.size());
+        } else {
+            for (UINT i = 0; i < frame.size * frame.size; ++i) {
+                AppendBytes(&data, frame.bgra, 4);
+            }
+        }
+        const DWORD andStride = ((frame.size + 31) / 32) * 4;
+        data.insert(data.end(), andStride * frame.size, 0);
+    }
+
+    return CreateMemoryStream(data.data(), static_cast<UINT>(data.size()), stream);
+}
+
+HRESULT CreateTransparentIcoStream(IStream** stream)
+{
+    // Bottom-up rows of the PNG test image: transparent top-left, colored elsewhere.
+    const std::vector<BYTE> pixels = {
+        0, 255, 0, 255,  255, 0, 0, 255,
+        0, 0, 0, 0,      0, 0, 255, 255,
+    };
+    return CreateIcoStream({ { 2, {}, pixels } }, stream);
+}
+
+// 8x8 frame of distinct blue shades (all with B >= 192): decodes to many more
+// distinct values than any flat frame, standing in for a true-color ICO entry.
+std::vector<BYTE> RichBluePixels()
+{
+    std::vector<BYTE> pixels;
+    for (UINT i = 0; i < 64; ++i) {
+        pixels.push_back(static_cast<BYTE>(192 + (i % 8) * 8));
+        pixels.push_back(0);
+        pixels.push_back(0);
+        pixels.push_back(255);
+    }
+    return pixels;
+}
+
 HRESULT CreateSvgStream(IStream** stream)
 {
     static constexpr char svg[] =
@@ -217,7 +304,7 @@ bool Renders(IStream* stream, const BackdropperSettings& settings)
     return true;
 }
 
-bool ContainsRedPixel(IStream* stream, const BackdropperSettings& settings)
+bool ContainsColorPixel(IStream* stream, const BackdropperSettings& settings, int bgraIndex)
 {
     HBITMAP bitmap = nullptr;
     WTS_ALPHATYPE alpha = WTSAT_UNKNOWN;
@@ -240,7 +327,13 @@ bool ContainsRedPixel(IStream* stream, const BackdropperSettings& settings)
     for (LONG y = 0; y < section.dsBm.bmHeight && !found; ++y) {
         for (LONG x = 0; x < section.dsBm.bmWidth; ++x) {
             const BYTE* pixel = bits + (static_cast<size_t>(y) * stride) + (x * 4);
-            if (pixel[2] > 180 && pixel[1] < 80 && pixel[0] < 80) {
+            bool match = pixel[bgraIndex] > 180;
+            for (int channel = 0; channel < 3; ++channel) {
+                if (channel != bgraIndex && pixel[channel] >= 80) {
+                    match = false;
+                }
+            }
+            if (match) {
                 found = true;
                 break;
             }
@@ -249,6 +342,34 @@ bool ContainsRedPixel(IStream* stream, const BackdropperSettings& settings)
 
     DeleteObject(bitmap);
     return found;
+}
+
+bool ContainsRedPixel(IStream* stream, const BackdropperSettings& settings)
+{
+    return ContainsColorPixel(stream, settings, 2);
+}
+
+bool TransparentPixelStaysTransparent(IStream* stream, const BackdropperSettings& settings)
+{
+    HBITMAP bitmap = nullptr;
+    WTS_ALPHATYPE alpha = WTSAT_UNKNOWN;
+    HRESULT hr = RenderBackdropperThumbnail(stream, 32, settings, &bitmap, &alpha);
+    if (FAILED(hr)) {
+        std::printf("FAIL: RenderBackdropperThumbnail (0x%08lx)\n", static_cast<unsigned long>(hr));
+        return false;
+    }
+
+    DIBSECTION section = {};
+    if (!GetObjectW(bitmap, sizeof(section), &section) || !section.dsBm.bmBits) {
+        DeleteObject(bitmap);
+        std::puts("FAIL: GetObject");
+        return false;
+    }
+
+    const BYTE* bits = static_cast<const BYTE*>(section.dsBm.bmBits);
+    const bool ok = bits[3] == 0 && alpha == WTSAT_ARGB;
+    DeleteObject(bitmap);
+    return ok;
 }
 
 }
@@ -331,6 +452,60 @@ int main()
     }
     const bool pdfRendered = Renders(pdf.Get(), settings);
 
+    ComPtr<IStream> ico;
+    hr = CreateTransparentIcoStream(&ico);
+    if (FAILED(hr)) {
+        CoUninitialize();
+        return Fail("CreateTransparentIcoStream", hr);
+    }
+    const bool icoKeptTransparent = TransparentPixelStaysTransparent(ico.Get(), settings);
+    const bool icoContentRendered = ContainsRedPixel(ico.Get(), settings);
+
+    BackdropperSettings icoBackdropSettings = settings;
+    icoBackdropSettings.protectAppIcons = false;
+    const bool icoComposited = TransparentPixelBecameBackground(ico.Get(), icoBackdropSettings);
+
+    // Frame selection: neither 2px nor 4px covers the 32px request, so the
+    // larger (green) frame must win over frame 0 (red).
+    ComPtr<IStream> icoSmallFrames;
+    hr = CreateIcoStream({ { 2, { 0, 0, 255, 255 } }, { 4, { 0, 255, 0, 255 } } }, &icoSmallFrames);
+    if (FAILED(hr)) {
+        CoUninitialize();
+        return Fail("CreateIcoStream small frames", hr);
+    }
+    const bool icoPickedLargestFrame = ContainsColorPixel(icoSmallFrames.Get(), settings, 1)
+        && !ContainsColorPixel(icoSmallFrames.Get(), settings, 2);
+
+    // Both 64px and 128px cover the 32px request, so the smaller covering
+    // (blue) frame must win over the largest.
+    ComPtr<IStream> icoLargeFrames;
+    hr = CreateIcoStream({ { 64, { 255, 0, 0, 255 } }, { 128, { 0, 0, 255, 255 } } }, &icoLargeFrames);
+    if (FAILED(hr)) {
+        CoUninitialize();
+        return Fail("CreateIcoStream large frames", hr);
+    }
+    const bool icoPickedCoveringFrame = ContainsColorPixel(icoLargeFrames.Get(), settings, 0)
+        && !ContainsColorPixel(icoLargeFrames.Get(), settings, 2);
+
+    // Same-size tie-break: the richer (blue multi-shade) frame must beat the
+    // flat green frame whichever side of the directory it sits on.
+    const std::vector<BYTE> richBlue = RichBluePixels();
+    ComPtr<IStream> icoRichFirst;
+    hr = CreateIcoStream({ { 8, {}, richBlue }, { 8, { 0, 255, 0, 255 } } }, &icoRichFirst);
+    if (FAILED(hr)) {
+        CoUninitialize();
+        return Fail("CreateIcoStream rich-first frames", hr);
+    }
+    ComPtr<IStream> icoRichLast;
+    hr = CreateIcoStream({ { 8, { 0, 255, 0, 255 } }, { 8, {}, richBlue } }, &icoRichLast);
+    if (FAILED(hr)) {
+        CoUninitialize();
+        return Fail("CreateIcoStream rich-last frames", hr);
+    }
+    const bool icoPickedRichestFrame =
+        ContainsColorPixel(icoRichFirst.Get(), settings, 0) && !ContainsColorPixel(icoRichFirst.Get(), settings, 1)
+        && ContainsColorPixel(icoRichLast.Get(), settings, 0) && !ContainsColorPixel(icoRichLast.Get(), settings, 1);
+
     BYTE junk[] = { 1, 2, 3, 4 };
     ComPtr<IStream> bad;
     bad.Attach(SHCreateMemStream(junk, sizeof(junk)));
@@ -357,7 +532,23 @@ int main()
     if (!pdfRendered) {
         return Fail("PDF did not render");
     }
+    if (!icoKeptTransparent || !icoContentRendered) {
+        return Fail("ICO did not stay transparent with KeepIcoTransparent on");
+    }
+    if (!icoComposited) {
+        return Fail("ICO was not composited with KeepIcoTransparent off");
+    }
+    if (!icoPickedLargestFrame) {
+        return Fail("ICO frame selection did not pick the largest undersized frame");
+    }
+    if (!icoPickedCoveringFrame) {
+        return Fail("ICO frame selection did not pick the smallest covering frame");
+    }
+    if (!icoPickedRichestFrame) {
+        return Fail("ICO frame selection did not prefer the richest same-size frame");
+    }
 
-    std::puts("OK: PNG/TGA/PSD/SVG transparency composited, SVG content rendered, blank SVG rejected, PDF rendered, corrupt input rejected.");
+    std::puts("OK: PNG/TGA/PSD/SVG transparency composited, SVG content rendered, blank SVG rejected, PDF rendered, "
+        "ICO transparency preserved and frame selection correct, corrupt input rejected.");
     return 0;
 }

@@ -85,6 +85,7 @@ BackdropperSettings LoadBackdropperSettings()
     ParseColor(ReadString(key, L"CheckerColorA", L"#FFFFFF").c_str(), &settings.checkerA);
     ParseColor(ReadString(key, L"CheckerColorB", L"#C8C8C8").c_str(), &settings.checkerB);
     settings.checkerSize = std::max(1u, std::min(64u, static_cast<UINT>(ReadDword(key, L"CheckerSize", 8))));
+    settings.protectAppIcons = ReadDword(key, L"ProtectAppIcons", 1) != 0;
     settings.deleteThumbnailDbsOnSave = ReadDword(key, L"DeleteThumbnailDbsOnSave", 0) != 0;
     settings.checkUpdatesAutomatically = ReadDword(key, L"CheckUpdatesAutomatically", 1) != 0;
     for (size_t i = 0; i < kBackdropperFormats.size(); ++i) {
@@ -109,6 +110,7 @@ HRESULT SaveBackdropperSettings(const BackdropperSettings& settings)
     if (SUCCEEDED(hr)) hr = WriteString(key, L"CheckerColorA", FormatColor(settings.checkerA));
     if (SUCCEEDED(hr)) hr = WriteString(key, L"CheckerColorB", FormatColor(settings.checkerB));
     if (SUCCEEDED(hr)) hr = WriteDword(key, L"CheckerSize", std::max(1u, std::min(64u, settings.checkerSize)));
+    if (SUCCEEDED(hr)) hr = WriteDword(key, L"ProtectAppIcons", settings.protectAppIcons ? 1 : 0);
     if (SUCCEEDED(hr)) hr = WriteDword(key, L"DeleteThumbnailDbsOnSave", settings.deleteThumbnailDbsOnSave ? 1 : 0);
     if (SUCCEEDED(hr)) hr = WriteDword(key, L"CheckUpdatesAutomatically", settings.checkUpdatesAutomatically ? 1 : 0);
     for (size_t i = 0; i < kBackdropperFormats.size(); ++i) {

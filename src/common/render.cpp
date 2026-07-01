@@ -21,6 +21,7 @@
 #include <cstring>
 #include <limits>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 using Microsoft::WRL::ComPtr;
@@ -847,6 +848,97 @@ bool WicSourceHasVisiblePixels(IWICImagingFactory* factory, IWICBitmapSource* so
     return false;
 }
 
+UINT CountDistinctPixelValues(IWICImagingFactory* factory, IWICBitmapSource* source, UINT width, UINT height)
+{
+    ComPtr<IWICFormatConverter> converter;
+    if (FAILED(factory->CreateFormatConverter(&converter))
+        || FAILED(converter->Initialize(source, GUID_WICPixelFormat32bppPBGRA,
+            WICBitmapDitherTypeNone, nullptr, 0.0, WICBitmapPaletteTypeCustom))) {
+        return 0;
+    }
+
+    const UINT stride = width * 4;
+    std::vector<BYTE> pixels(static_cast<size_t>(stride) * height);
+    if (FAILED(converter->CopyPixels(nullptr, stride, static_cast<UINT>(pixels.size()), pixels.data()))) {
+        return 0;
+    }
+
+    std::unordered_set<UINT32> values;
+    for (size_t i = 0; i + 3 < pixels.size(); i += 4) {
+        UINT32 value = 0;
+        memcpy(&value, pixels.data() + i, sizeof(value));
+        values.insert(value);
+    }
+    return static_cast<UINT>(values.size());
+}
+
+// ICO frames are separate directory entries; pick the smallest frame that still
+// covers the requested size, or the largest available, instead of frame 0
+// (frame 0 is often the 16x16 entry, which Explorer would upscale into a blur).
+// The same size commonly repeats at 1/4/8/32bpp, and WIC neither preserves
+// directory order nor exposes the stored depth, so dimension ties are broken by
+// decoded color/alpha richness: the deeper frame decodes to more distinct values.
+HRESULT GetBestIcoFrame(IWICImagingFactory* factory, IWICBitmapDecoder* decoder, UINT maxSize,
+    IWICBitmapFrameDecode** frame)
+{
+    UINT count = 0;
+    HRESULT hr = decoder->GetFrameCount(&count);
+    if (FAILED(hr)) {
+        return hr;
+    }
+
+    UINT bestDim = 0;
+    bool bestCovers = false;
+    std::vector<UINT> dims(count, 0);
+    for (UINT i = 0; i < count; ++i) {
+        ComPtr<IWICBitmapFrameDecode> candidate;
+        UINT width = 0;
+        UINT height = 0;
+        if (FAILED(decoder->GetFrame(i, &candidate))
+            || FAILED(candidate->GetSize(&width, &height)) || width == 0 || height == 0) {
+            continue;
+        }
+        dims[i] = std::max(width, height);
+        const bool covers = dims[i] >= maxSize;
+        const bool better = bestDim == 0
+            || (covers && !bestCovers)
+            || (covers == bestCovers && (covers ? dims[i] < bestDim : dims[i] > bestDim));
+        if (better) {
+            bestDim = dims[i];
+            bestCovers = covers;
+        }
+    }
+    if (bestDim == 0) {
+        return E_FAIL;
+    }
+
+    std::vector<UINT> candidates;
+    for (UINT i = 0; i < count; ++i) {
+        if (dims[i] == bestDim) {
+            candidates.push_back(i);
+        }
+    }
+
+    UINT bestIndex = candidates.front();
+    if (candidates.size() > 1) {
+        UINT bestRichness = 0;
+        for (const UINT i : candidates) {
+            ComPtr<IWICBitmapFrameDecode> candidate;
+            UINT width = 0;
+            UINT height = 0;
+            if (FAILED(decoder->GetFrame(i, &candidate)) || FAILED(candidate->GetSize(&width, &height))) {
+                continue;
+            }
+            const UINT richness = CountDistinctPixelValues(factory, candidate.Get(), width, height);
+            if (richness >= bestRichness) {
+                bestRichness = richness;
+                bestIndex = i;
+            }
+        }
+    }
+    return decoder->GetFrame(bestIndex, frame);
+}
+
 HRESULT RenderWicSource(IWICImagingFactory* factory, IWICBitmapSource* source, UINT sourceWidth, UINT sourceHeight,
     UINT maxSize, const BackdropperSettings& settings, HBITMAP* bitmap, WTS_ALPHATYPE* alphaType)
 {
@@ -952,8 +1044,11 @@ HRESULT RenderBackdropperThumbnail(IStream* stream, UINT maxSize, const Backdrop
     ComPtr<IWICBitmapDecoder> decoder;
     hr = factory->CreateDecoderFromStream(stream, nullptr, WICDecodeMetadataCacheOnDemand, &decoder);
     if (SUCCEEDED(hr)) {
+        GUID container = {};
+        const bool isIco = SUCCEEDED(decoder->GetContainerFormat(&container)) && container == GUID_ContainerFormatIco;
+
         ComPtr<IWICBitmapFrameDecode> frame;
-        hr = decoder->GetFrame(0, &frame);
+        hr = isIco ? GetBestIcoFrame(factory.Get(), decoder.Get(), maxSize, &frame) : decoder->GetFrame(0, &frame);
         if (FAILED(hr)) {
             return hr;
         }
@@ -965,7 +1060,11 @@ HRESULT RenderBackdropperThumbnail(IStream* stream, UINT maxSize, const Backdrop
             return E_FAIL;
         }
         if (!inputLooksSvg || WicSourceHasVisiblePixels(factory.Get(), frame.Get(), sourceWidth, sourceHeight, maxSize)) {
-            return RenderWicSource(factory.Get(), frame.Get(), sourceWidth, sourceHeight, maxSize, settings, bitmap, alphaType);
+            BackdropperSettings effective = settings;
+            if (isIco && settings.protectAppIcons) {
+                effective.mode = BackdropMode::None;
+            }
+            return RenderWicSource(factory.Get(), frame.Get(), sourceWidth, sourceHeight, maxSize, effective, bitmap, alphaType);
         }
     }
 

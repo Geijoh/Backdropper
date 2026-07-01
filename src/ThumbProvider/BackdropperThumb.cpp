@@ -264,7 +264,7 @@ HRESULT UnregisterServer()
     return S_OK;
 }
 
-class ThumbnailProvider final : public IInitializeWithStream, public IThumbnailProvider {
+class ThumbnailProvider final : public IInitializeWithStream, public IThumbnailProvider, public IThumbnailSettings {
 public:
     ThumbnailProvider() { InterlockedIncrement(&g_dllRefs); }
     ~ThumbnailProvider() { InterlockedDecrement(&g_dllRefs); }
@@ -280,11 +280,19 @@ public:
             *object = static_cast<IInitializeWithStream*>(this);
         } else if (riid == IID_IThumbnailProvider) {
             *object = static_cast<IThumbnailProvider*>(this);
+        } else if (riid == IID_IThumbnailSettings) {
+            *object = static_cast<IThumbnailSettings*>(this);
         } else {
             return E_NOINTERFACE;
         }
 
         AddRef();
+        return S_OK;
+    }
+
+    IFACEMETHODIMP SetContext(WTS_CONTEXTFLAGS flags) override
+    {
+        contextFlags_ = flags;
         return S_OK;
     }
 
@@ -316,12 +324,18 @@ public:
 
     IFACEMETHODIMP GetThumbnail(UINT cx, HBITMAP* bitmap, WTS_ALPHATYPE* alphaType) override
     {
-        return RenderBackdropperThumbnail(stream_.Get(), cx, LoadBackdropperSettings(), bitmap, alphaType);
+        BackdropperSettings settings = LoadBackdropperSettings();
+        if (settings.protectAppIcons && (contextFlags_ & WTSCF_APPSTYLE) != 0) {
+            // ponytail: taskbar/Start app icons reuse thumbnail handlers; never backdrop app-style requests.
+            settings.mode = BackdropMode::None;
+        }
+        return RenderBackdropperThumbnail(stream_.Get(), cx, settings, bitmap, alphaType);
     }
 
 private:
     long refs_ = 1;
     ComPtr<IStream> stream_;
+    WTS_CONTEXTFLAGS contextFlags_ = WTSCF_DEFAULT;
 };
 
 class ClassFactory final : public IClassFactory {
