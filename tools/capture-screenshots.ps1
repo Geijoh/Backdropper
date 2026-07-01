@@ -30,6 +30,9 @@ public static class ScreenshotWin32
     const int SW_RESTORE = 9;
     const int WM_LBUTTONDOWN = 0x0201;
     const int WM_LBUTTONUP = 0x0202;
+    const uint RDW_INVALIDATE = 0x0001;
+    const uint RDW_UPDATENOW = 0x0100;
+    const uint RDW_ALLCHILDREN = 0x0080;
     const uint PW_RENDERFULLCONTENT = 0x00000002;
     static readonly IntPtr DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = new IntPtr(-4);
 
@@ -42,6 +45,7 @@ public static class ScreenshotWin32
     [DllImport("user32.dll")] static extern bool SetCursorPos(int x, int y);
     [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
     [DllImport("user32.dll")] static extern bool PrintWindow(IntPtr hWnd, IntPtr hdcBlt, uint nFlags);
+    [DllImport("user32.dll")] static extern bool RedrawWindow(IntPtr hWnd, IntPtr lprcUpdate, IntPtr hrgnUpdate, uint flags);
     [DllImport("user32.dll")] static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
     [DllImport("user32.dll")] static extern bool SetProcessDpiAwarenessContext(IntPtr dpiContext);
     [DllImport("user32.dll")] static extern uint GetDpiForWindow(IntPtr hWnd);
@@ -89,6 +93,7 @@ public static class ScreenshotWin32
 
     public static void SaveWindowPng(IntPtr hWnd, string path)
     {
+        RedrawWindow(hWnd, IntPtr.Zero, IntPtr.Zero, RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
         RECT rect;
         if (!GetWindowRect(hWnd, out rect)) throw new InvalidOperationException("Could not read window bounds.");
         int width = rect.Right - rect.Left;
