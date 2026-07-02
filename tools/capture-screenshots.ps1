@@ -319,7 +319,7 @@ try {
     Start-Sleep -Milliseconds 100
     [ScreenshotWin32]::SaveWindowPng($hwnd, (Join-Path $OutDir "settings-supported-formats.png"))
 
-    [ScreenshotWin32]::ClientClick($hwnd, [int]($width * 744 / 1060), [int]($height * 586 / 692))
+    [ScreenshotWin32]::ClientClick($hwnd, [int]($width * 744 / 1060), [int]($height * 562 / 692))
     Start-Sleep -Milliseconds 200
 
     # Natural layout is 1060x692 DIPs; ratio keeps this DPI-independent.

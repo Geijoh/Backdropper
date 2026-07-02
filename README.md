@@ -16,7 +16,7 @@ Release builds are code-signed with Azure Artifact Signing.
 
 Use **Supported formats** in the app to choose which extensions Backdropper registers. EPS and legacy PostScript-style AI require [Ghostscript](https://ghostscript.com/releases/gsdnld.html); EPS is disabled automatically when Ghostscript is not installed.
 
-Windows can ask thumbnail handlers for taskbar and Start app icons. The **Protect app icons** toggle in Supported formats is on by default and skips Backdropper backgrounds for those app-icon requests.
+Windows can ask thumbnail handlers for taskbar and Start app icons. Backdropper always skips backgrounds for those app-icon requests.
 
 Use **Check for updates** in the app to check GitHub Releases. When a newer build is available, Backdropper can download the latest Windows x64 build, verify the signed binaries, replace the current files, and relaunch. The install folder must be writable by the current user.
 

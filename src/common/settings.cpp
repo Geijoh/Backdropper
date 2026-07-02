@@ -85,7 +85,8 @@ BackdropperSettings LoadBackdropperSettings()
     ParseColor(ReadString(key, L"CheckerColorA", L"#FFFFFF").c_str(), &settings.checkerA);
     ParseColor(ReadString(key, L"CheckerColorB", L"#C8C8C8").c_str(), &settings.checkerB);
     settings.checkerSize = std::max(1u, std::min(64u, static_cast<UINT>(ReadDword(key, L"CheckerSize", 8))));
-    settings.protectAppIcons = ReadDword(key, L"ProtectAppIcons", 1) != 0;
+    // ponytail: app icons are never a valid Backdropper target; keep the old setting forced on.
+    settings.protectAppIcons = true;
     settings.deleteThumbnailDbsOnSave = ReadDword(key, L"DeleteThumbnailDbsOnSave", 0) != 0;
     settings.checkUpdatesAutomatically = ReadDword(key, L"CheckUpdatesAutomatically", 1) != 0;
     for (size_t i = 0; i < kBackdropperFormats.size(); ++i) {

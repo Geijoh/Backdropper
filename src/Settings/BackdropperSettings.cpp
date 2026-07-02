@@ -101,7 +101,6 @@ enum class Hit {
     FormatDds,
     FormatClose,
     FormatDone,
-    FormatProtectIcons,
     GhostscriptLink,
     Register,
     Unregister,
@@ -261,7 +260,6 @@ struct Layout {
     RECT autoCheckToggle {};
     RECT formatManageBtn {};
     std::array<RECT, kBackdropperFormatCount> formatToggles {};
-    RECT protectIconsToggle {};
     RECT formatsDialog {};
     RECT formatsClose {};
     RECT formatsDone {};
@@ -771,7 +769,6 @@ RECT HoverRect(Hit hit)
     case Hit::FormatManage: return g_layout.formatManageBtn;
     case Hit::FormatClose: return g_layout.formatsClose;
     case Hit::FormatDone: return g_layout.formatsDone;
-    case Hit::FormatProtectIcons: return g_layout.protectIconsToggle;
     case Hit::GhostscriptLink: return g_layout.ghostscriptLink;
     case Hit::Register: return g_layout.registerBtn;
     case Hit::Unregister: return g_layout.unregisterBtn;
@@ -794,7 +791,6 @@ std::vector<Hit> FocusableHits()
                 hits.push_back(static_cast<Hit>(static_cast<int>(Hit::FormatPng) + static_cast<int>(i)));
             }
         }
-        hits.push_back(Hit::FormatProtectIcons);
         if (!g_state.ghostscriptInstalled) {
             hits.push_back(Hit::GhostscriptLink);
         }
@@ -879,7 +875,6 @@ std::wstring AccessibleName(Hit hit)
     case Hit::FormatManage: return L"Manage supported formats";
     case Hit::FormatClose: return L"Close supported formats";
     case Hit::FormatDone: return L"Done";
-    case Hit::FormatProtectIcons: return L"Protect app icons";
     case Hit::GhostscriptLink: return L"Download Ghostscript";
     case Hit::Register: return L"Register formats";
     case Hit::Unregister: return L"Unregister formats";
@@ -910,7 +905,6 @@ bool HitIsToggle(Hit hit)
     return hit == Hit::MatchSystem
         || hit == Hit::RestartToggle
         || hit == Hit::AutoCheckToggle
-        || hit == Hit::FormatProtectIcons
         || formatIndex >= 0;
 }
 
@@ -920,7 +914,6 @@ bool HitIsChecked(Hit hit)
     if (hit == Hit::MatchSystem) return g_state.matchSystemTheme;
     if (hit == Hit::RestartToggle) return g_state.settings.deleteThumbnailDbsOnSave;
     if (hit == Hit::AutoCheckToggle) return g_state.settings.checkUpdatesAutomatically;
-    if (hit == Hit::FormatProtectIcons) return g_state.settings.protectAppIcons;
     if (formatIndex >= 0) return EffectiveFormatEnabled(static_cast<size_t>(formatIndex));
     return false;
 }
@@ -1903,7 +1896,7 @@ void CalculateLayout(HWND window)
     g_layout.privacyViewport = RectDip(privacyX + 26, privacyY + 92, privacyW - 52, privacyH - 120);
 
     constexpr double formatsDialogW = 560;
-    constexpr double formatsDialogH = 543;
+    constexpr double formatsDialogH = 492;
     const double formatsDialogX = (w - formatsDialogW) / 2;
     const double formatsDialogY = (h - formatsDialogH) / 2;
     g_layout.formatsDialog = RectDip(formatsDialogX, formatsDialogY, formatsDialogW, formatsDialogH);
@@ -1916,7 +1909,6 @@ void CalculateLayout(HWND window)
         const double row = static_cast<double>(position / 2);
         g_layout.formatToggles[i] = RectDip(formatsDialogX + 24 + col * (colW + 14), formatsDialogY + 109 + row * 51, colW, 42);
     }
-    g_layout.protectIconsToggle = RectDip(formatsDialogX + 24, formatsDialogY + 109 + 6 * 51, formatsDialogW - 48, 42);
     g_layout.ghostscriptLink = RectDip(formatsDialogX + 52, formatsDialogY + formatsDialogH - 27, 150, 18);
 }
 
@@ -3642,16 +3634,6 @@ void DrawFormatsDialog(Graphics& g, const RECT& client, const Theme& t)
         DrawFormatSwitch(g, sw, EffectiveFormatEnabled(i), available, t);
     }
 
-    {
-        const RECT row = g_layout.protectIconsToggle;
-        const bool hovered = g_hover == Hit::FormatProtectIcons;
-        DrawRoundedBorder(g, row, 6, hovered ? t.rowHover : t.ctrl, t.ctrlBorder);
-        DrawTextBlock(g, L"Protect app icons", RectDip(Dip(row.left) + 12, Dip(row.top) + 9, 170, 18), 13, t.fg, FontStyleBold);
-        DrawTextBlock(g, L"Skips backgrounds for taskbar/Start requests", RectDip(Dip(row.left) + 190, Dip(row.top) + 10, 270, 16), 11.5f, t.fg2);
-        const RECT sw = RectDip(Dip(row.right) - 52, Dip(row.top) + 11, 40, 20);
-        DrawFormatSwitch(g, sw, g_state.settings.protectAppIcons, true, t);
-    }
-
     SolidBrush footerStroke(t.stroke);
     g.FillRectangle(&footerStroke, RectFOf(RectDip(x, y + h - 68, w, 1)));
     DrawInfoIcon(g, RectDip(x + 24, y + h - 42, 16, 16), t);
@@ -3715,7 +3697,6 @@ Hit HitTest(POINT pt)
     if (g_state.formatsOpen) {
         if (PtIn(g_layout.formatsClose, pt)) return Hit::FormatClose;
         if (PtIn(g_layout.formatsDone, pt)) return Hit::FormatDone;
-        if (PtIn(g_layout.protectIconsToggle, pt)) return Hit::FormatProtectIcons;
         if (!g_state.ghostscriptInstalled && PtIn(g_layout.ghostscriptLink, pt)) return Hit::GhostscriptLink;
         for (size_t i = 0; i < kBackdropperFormatCount; ++i) {
             if (g_state.formatAvailable[i] && PtIn(g_layout.formatToggles[i], pt)) {
@@ -3932,9 +3913,6 @@ void ActivateHit(HWND window, Hit hit)
             InvalidateRect(window, nullptr, TRUE);
         } else if (hit == Hit::GhostscriptLink) {
             ShellExecuteW(window, L"open", kGhostscriptUrl, nullptr, nullptr, SW_SHOWNORMAL);
-        } else if (hit == Hit::FormatProtectIcons) {
-            g_state.settings.protectAppIcons = !g_state.settings.protectAppIcons;
-            InvalidateRect(window, nullptr, TRUE);
         } else if (formatIndex >= 0 && g_state.formatAvailable[formatIndex]) {
             g_state.settings.enabledFormats[formatIndex] = !g_state.settings.enabledFormats[formatIndex];
             InvalidateRect(window, nullptr, TRUE);

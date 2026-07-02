@@ -319,7 +319,7 @@ public:
     IFACEMETHODIMP GetThumbnail(UINT cx, HBITMAP* bitmap, WTS_ALPHATYPE* alphaType) override
     {
         BackdropperSettings settings = LoadBackdropperSettings();
-        if (settings.protectAppIcons && (contextFlags_ & WTSCF_APPSTYLE) != 0) {
+        if ((contextFlags_ & WTSCF_APPSTYLE) != 0) {
             // ponytail: taskbar/Start app icons reuse thumbnail handlers; never backdrop app-style requests.
             settings.mode = BackdropMode::None;
         }
