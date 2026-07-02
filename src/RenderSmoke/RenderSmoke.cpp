@@ -268,11 +268,11 @@ int Fail(const char* message, HRESULT hr = E_FAIL)
     return 1;
 }
 
-bool TransparentPixelBecameBackground(IStream* stream, const BackdropperSettings& settings)
+bool TransparentPixelBecameBackground(IStream* stream, const BackdropperSettings& settings, UINT maxSize = 96)
 {
     HBITMAP bitmap = nullptr;
     WTS_ALPHATYPE alpha = WTSAT_UNKNOWN;
-    HRESULT hr = RenderBackdropperThumbnail(stream, 32, settings, &bitmap, &alpha);
+    HRESULT hr = RenderBackdropperThumbnail(stream, maxSize, settings, &bitmap, &alpha);
     if (FAILED(hr)) {
         std::printf("FAIL: RenderBackdropperThumbnail (0x%08lx)\n", static_cast<unsigned long>(hr));
         return false;
@@ -395,6 +395,7 @@ int main()
     settings.checkerSize = 1;
 
     const bool pngTransparentBecameBackground = TransparentPixelBecameBackground(stream.Get(), settings);
+    const bool iconSizedPngStayedTransparent = TransparentPixelStaysTransparent(stream.Get(), settings);
 
     ComPtr<IStream> tga;
     hr = CreateTgaStream(&tga);
@@ -523,6 +524,9 @@ int main()
         || !psdTransparentBecameBackground || !svgTransparentBecameBackground) {
         return Fail("transparent pixel was not composited");
     }
+    if (!iconSizedPngStayedTransparent) {
+        return Fail("icon-sized PNG request did not stay transparent");
+    }
     if (!svgContentRendered) {
         return Fail("SVG content was blank");
     }
@@ -548,7 +552,7 @@ int main()
         return Fail("ICO frame selection did not prefer the richest same-size frame");
     }
 
-    std::puts("OK: PNG/TGA/PSD/SVG transparency composited, SVG content rendered, blank SVG rejected, PDF rendered, "
+    std::puts("OK: PNG/TGA/PSD/SVG transparency composited, icon-sized PNG transparency preserved, SVG content rendered, blank SVG rejected, PDF rendered, "
         "ICO transparency preserved and frame selection correct, corrupt input rejected.");
     return 0;
 }

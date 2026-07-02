@@ -1031,6 +1031,12 @@ HRESULT RenderBackdropperThumbnail(IStream* stream, UINT maxSize, const Backdrop
     *bitmap = nullptr;
     *alphaType = WTSAT_UNKNOWN;
 
+    BackdropperSettings effectiveSettings = settings;
+    if (maxSize <= 64) {
+        // ponytail: taskbar/Start icon requests are small and often omit WTSCF_APPSTYLE; thumbnails start above this.
+        effectiveSettings.mode = BackdropMode::None;
+    }
+
     LARGE_INTEGER zero = {};
     stream->Seek(zero, STREAM_SEEK_SET, nullptr);
     const bool inputLooksSvg = StreamLooksSvg(stream);
@@ -1060,8 +1066,8 @@ HRESULT RenderBackdropperThumbnail(IStream* stream, UINT maxSize, const Backdrop
             return E_FAIL;
         }
         if (!inputLooksSvg || WicSourceHasVisiblePixels(factory.Get(), frame.Get(), sourceWidth, sourceHeight, maxSize)) {
-            BackdropperSettings effective = settings;
-            if (isIco && settings.protectAppIcons) {
+            BackdropperSettings effective = effectiveSettings;
+            if (isIco && effectiveSettings.protectAppIcons) {
                 effective.mode = BackdropMode::None;
             }
             return RenderWicSource(factory.Get(), frame.Get(), sourceWidth, sourceHeight, maxSize, effective, bitmap, alphaType);
@@ -1078,5 +1084,5 @@ HRESULT RenderBackdropperThumbnail(IStream* stream, UINT maxSize, const Backdrop
     if (FAILED(hr)) {
         return hr;
     }
-    return RenderWicSource(factory.Get(), fallbackSource.Get(), decoded.width, decoded.height, maxSize, settings, bitmap, alphaType);
+    return RenderWicSource(factory.Get(), fallbackSource.Get(), decoded.width, decoded.height, maxSize, effectiveSettings, bitmap, alphaType);
 }
