@@ -234,7 +234,8 @@ function Wait-BackdropperWindow($process) {
 
 function Set-DemoSettings {
     $path = "HKCU:\Software\Backdropper"
-    $names = @("Mode", "SolidColor", "CheckerColorA", "CheckerColorB", "CheckerSize", "ProtectAppIcons", "DeleteThumbnailDbsOnSave", "CheckUpdatesAutomatically")
+    $formatNames = @("Format_PNG", "Format_WEBP", "Format_GIF", "Format_ICO", "Format_SVG", "Format_PSD", "Format_AI", "Format_EPS", "Format_PDF", "Format_AVIF", "Format_TGA", "Format_DDS")
+    $names = @("Mode", "SolidColor", "CheckerColorA", "CheckerColorB", "CheckerSize", "ProtectAppIcons", "DeleteThumbnailDbsOnSave", "CheckUpdatesAutomatically") + $formatNames
     $snapshot = @{
         existed = Test-Path -LiteralPath $path
         values = @{}
@@ -250,7 +251,9 @@ function Set-DemoSettings {
         }
     }
 
-    New-Item -Path $path -Force | Out-Null
+    if (-not (Test-Path -LiteralPath $path)) {
+        New-Item -Path $path | Out-Null
+    }
     # ponytail: pin demo settings so README screenshots do not depend on local registry state.
     New-ItemProperty -LiteralPath $path -Name Mode -PropertyType String -Value "checker" -Force | Out-Null
     New-ItemProperty -LiteralPath $path -Name SolidColor -PropertyType String -Value "#FFFFFF" -Force | Out-Null
@@ -260,6 +263,9 @@ function Set-DemoSettings {
     New-ItemProperty -LiteralPath $path -Name ProtectAppIcons -PropertyType DWord -Value 1 -Force | Out-Null
     New-ItemProperty -LiteralPath $path -Name DeleteThumbnailDbsOnSave -PropertyType DWord -Value 0 -Force | Out-Null
     New-ItemProperty -LiteralPath $path -Name CheckUpdatesAutomatically -PropertyType DWord -Value 0 -Force | Out-Null
+    foreach ($name in $formatNames) {
+        New-ItemProperty -LiteralPath $path -Name $name -PropertyType DWord -Value 1 -Force | Out-Null
+    }
 
     return $snapshot
 }
@@ -271,8 +277,10 @@ function Restore-Settings($snapshot) {
         return
     }
 
-    New-Item -Path $path -Force | Out-Null
-    foreach ($name in @("Mode", "SolidColor", "CheckerColorA", "CheckerColorB", "CheckerSize", "ProtectAppIcons", "DeleteThumbnailDbsOnSave", "CheckUpdatesAutomatically")) {
+    if (-not (Test-Path -LiteralPath $path)) {
+        New-Item -Path $path | Out-Null
+    }
+    foreach ($name in $snapshot.values.Keys) {
         $value = $snapshot.values[$name]
         if ($null -eq $value) {
             Remove-ItemProperty -LiteralPath $path -Name $name -ErrorAction SilentlyContinue

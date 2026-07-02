@@ -120,17 +120,6 @@ std::wstring EffectiveProgIdForExtension(const wchar_t* extension)
     return progId;
 }
 
-bool BackupExists(const wchar_t* extension)
-{
-    HKEY key = nullptr;
-    const LSTATUS status = RegOpenKeyExW(HKEY_CURRENT_USER, BackupPath(extension).c_str(), 0, KEY_READ, &key);
-    if (status == ERROR_SUCCESS) {
-        RegCloseKey(key);
-        return true;
-    }
-    return false;
-}
-
 void SavePreviousHandler(const wchar_t* extension)
 {
     HKEY backup = nullptr;
@@ -178,7 +167,11 @@ void RestoreHandlerValue(const std::wstring& path, DWORD hadValue, const wchar_t
     std::wstring previous;
     if (hadValue && ReadStringValue(HKEY_CURRENT_USER, backupName, backupValue, &previous)) {
         SetStringValue(HKEY_CURRENT_USER, path, nullptr, previous);
-    } else {
+        return;
+    }
+
+    std::wstring current;
+    if (ReadStringValue(HKEY_CURRENT_USER, path, nullptr, &current) && _wcsicmp(current.c_str(), kClsidString) == 0) {
         SHDeleteKeyW(HKEY_CURRENT_USER, path.c_str());
     }
 }
@@ -190,7 +183,10 @@ void RestorePreviousHandler(const wchar_t* extension)
     RestoreHandlerValue(ExtensionHandlerPath(extension), hadValue, BackupPath(extension).c_str(), L"Value");
 
     std::wstring progId;
-    if (ReadStringValue(HKEY_CURRENT_USER, BackupPath(extension), L"ProgId", &progId)) {
+    if (!ReadStringValue(HKEY_CURRENT_USER, BackupPath(extension), L"ProgId", &progId)) {
+        progId = EffectiveProgIdForExtension(extension);
+    }
+    if (!progId.empty()) {
         DWORD hadProgIdValue = 0;
         ReadDwordValue(HKEY_CURRENT_USER, BackupPath(extension), L"HadProgIdValue", &hadProgIdValue);
         RestoreHandlerValue(ProgIdHandlerPath(progId), hadProgIdValue, BackupPath(extension).c_str(), L"ProgIdValue");
@@ -224,9 +220,7 @@ HRESULT RegisterServer()
     for (size_t i = 0; i < kBackdropperFormats.size(); ++i) {
         const wchar_t* extension = kBackdropperFormats[i];
         if (!settings.enabledFormats[i] || !CanRegisterBackdropperFormat(extension)) {
-            if (BackupExists(extension)) {
-                RestorePreviousHandler(extension);
-            }
+            RestorePreviousHandler(extension);
             continue;
         }
 

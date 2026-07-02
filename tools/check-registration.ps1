@@ -14,6 +14,7 @@ function Get-DefaultValue($root, $path) {
 $hkcu = [Microsoft.Win32.Registry]::CurrentUser
 $hkcr = [Microsoft.Win32.Registry]::ClassesRoot
 $registeredDll = Get-DefaultValue $hkcu "Software\Classes\CLSID\$clsid\InprocServer32"
+$settingsKey = $hkcu.OpenSubKey('Software\Backdropper')
 
 Write-Host "Expected DLL:   $expectedDll"
 Write-Host "Registered DLL: $registeredDll"
@@ -22,17 +23,39 @@ if ($expectedDll -and $registeredDll -and $expectedDll -ine $registeredDll) {
 }
 Write-Host ''
 
-$extensions | ForEach-Object {
+$rows = $extensions | ForEach-Object {
     $ext = $_
+    $enabledName = "Format$($ext.Replace('.', '_').ToUpperInvariant())"
+    $enabled = $true
+    if ($settingsKey) {
+        $enabledValue = $settingsKey.GetValue($enabledName)
+        if ($null -ne $enabledValue) {
+            $enabled = [int]$enabledValue -ne 0
+        }
+    }
     $progId = Get-DefaultValue $hkcr $ext
     $extensionHandler = Get-DefaultValue $hkcr "$ext\shellex\$thumbHandler"
     $progIdHandler = if ($progId) { Get-DefaultValue $hkcr "$progId\shellex\$thumbHandler" } else { $null }
+    $active = ($extensionHandler -ieq $clsid) -or ($progIdHandler -ieq $clsid)
 
     [pscustomobject]@{
         Extension = $ext
+        Enabled = $enabled
         ProgID = $progId
         ExtensionHandler = $extensionHandler
         ProgIDHandler = $progIdHandler
-        BackdropperActive = ($extensionHandler -ieq $clsid) -or ($progIdHandler -ieq $clsid)
+        Active = $active
+        Unexpected = -not $enabled -and $active
     }
-} | Format-Table -AutoSize
+}
+
+if ($settingsKey) {
+    $settingsKey.Close()
+}
+
+$rows | Select-Object Extension, Enabled, Active, ProgID, ExtensionHandler, ProgIDHandler | Format-Table -AutoSize
+
+$unexpected = @($rows | Where-Object { $_.Unexpected })
+if ($unexpected.Count -gt 0) {
+    Write-Error "Backdropper is still registered for disabled format(s): $($unexpected.Extension -join ', ')"
+}
